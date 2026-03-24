@@ -1,10 +1,10 @@
 # Quetsal
 
-### A GNN+PPO agent that selects Qiskit transpilation passes — an intelligence layer above `opt_level=1/2`, not a from-scratch transpiler.
+### ### A GNN+PPO agent that adaptively sequences Qiskit optimization-stage passes — a learned replacement for the fixed pass pools behind `opt_level=1/2/3`.
 
 > _Quetsal_ is named after the Quetzal — a bird known for navigating dense forest canopies with
 > precision. Quetsal navigates the dense space of Qiskit transpilation passes, finding the optimal
-> circuit through optimization for each quantum circuit.
+> pass sequence through the optimization stage for each quantum circuit.
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
@@ -30,7 +30,7 @@ Quetsal is a reinforcement learning agent that learns to sequence Qiskit transpi
 - Not a ZX-calculus rewriter or gate-level optimizer
 - Not a replacement for Qiskit's layout or routing stages
 
-**Target metric:** Reduce 2-qubit gate count below `optimization_level=2` on QV, QAOA, and random SU4 benchmarks, 3–8 qubits, without increasing circuit depth.
+**Target metric:** Reduce 2-qubit gate count below `optimization_level=3` on QV, QAOA, and random SU4 benchmarks, 3–8 qubits, without increasing circuit depth.
 
 ---
 

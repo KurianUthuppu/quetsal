@@ -64,6 +64,19 @@ Validation target: IBM Kingston backend (156-qubit Heron r2).
 
 ---
 
+## Roadmap
+
+| Milestone                         | Target     | Scope                                                                                    |
+| --------------------------------- | ---------- | ---------------------------------------------------------------------------------------- |
+| **M1 — Environment + encoding**   | April 2026 | `DAGCircuit → PyG graph`, Gymnasium env (reset/step/reward), benchmark circuit suite     |
+| **M2 — PPO agent end-to-end**     | May 2026   | GINConv encoder wired to SB3 PPO, first training run, simulator results vs `opt_level=2` |
+| **M3 — Real hardware validation** | June 2026  | IBM Kingston runs, reward tuning, plugin integration via `PassManagerStagePlugin`        |
+| **M4 — Release + arXiv**          | July 2026  | PyPI package, arXiv quant-ph submission, `v1.0` tag                                      |
+
+`v0.1-dev` — target: end of April 2026
+
+---
+
 ## Related Work
 
 - Mills et al. (Quantinuum, Jan 2026): _"Reinforcement Learning for Adaptive Composition of Quantum Circuit Optimisation Passes"_ — arXiv:2601.21629. Uses GINConv + PPO over PyTKET passes on the Quantinuum native gateset.

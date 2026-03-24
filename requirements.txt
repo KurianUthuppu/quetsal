@@ -1,0 +1,5 @@
+qiskit>=2.0
+torch>=1.10
+torch-geometric>=2.0
+stable-baselines3>=1.6
+gymnasium>=0.27

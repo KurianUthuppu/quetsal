@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quetsal-qiskit"
+version = "0.1.0-dev"
+description = "RL agent that learns bespoke Qiskit transpiler pass sequences"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Kurian Uthuppu"},
+]
+keywords = ["qiskit", "quantum", "transpiler", "reinforcement-learning", "gnn"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "qiskit>=2.0",
+    "torch>=2.0",
+    "torch-geometric>=2.0",
+    "stable-baselines3>=2.0",
+    "gymnasium>=0.27",
+]
+
+[project.urls]
+Repository = "https://github.com/kurianuthuppu/quetsal"
+Issues = "https://github.com/kurianuthupku/quetsal/issues"
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "ipykernel"]
+
+[project.entry-points."qiskit.transpiler.stage"]
+quetsal = "quetsal.src.plugin.quetsal_plugin:QuetsalPlugin"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "benchmarks*", "training*"]

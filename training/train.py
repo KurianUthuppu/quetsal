@@ -165,7 +165,9 @@ def main() -> None:
 
     # ── 0. Set up logging (stdout + log file) ─────────────────────────────────
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = ckpt_dir / f"train_{timestamp}.log"
+    logs_dir = ckpt_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    log_path = logs_dir / f"train_{timestamp}.log"
     tee = _Tee(log_path)
     sys.stdout = tee
     print(f"[quetsal] Log -> {log_path}")
@@ -241,10 +243,11 @@ def main() -> None:
     )
     eval_env = Monitor(PassManagerEnv(circuits=eval_circuits, max_steps=MAX_STEPS_PER_EPISODE))
 
+    best_model_dir = ckpt_dir / "best_model" / timestamp
     eval_cb = EvalCallback(
         eval_env=eval_env,
-        best_model_save_path=str(ckpt_dir / "best_model"),
-        log_path=str(ckpt_dir / "eval_logs"),
+        best_model_save_path=str(best_model_dir),
+        log_path=str(ckpt_dir / "logs" / f"eval_{timestamp}"),
         eval_freq=args.checkpoint_freq,
         n_eval_episodes=len(eval_circuits),
         deterministic=True,
@@ -263,16 +266,17 @@ def main() -> None:
     )
     elapsed = time.time() - t1
     print(f"[quetsal] Training complete in {elapsed:.1f}s")
-
-    # ── 6. Save final model ───────────────────────────────────────────────────
-    final_path = ckpt_dir / "quetsal_final"
+    final_path = ckpt_dir / f"final_{timestamp}"
     save_agent(model, final_path)
-    print(f"[quetsal] Model saved -> {final_path}.zip")
+    print(f"[quetsal] Final model -> {final_path}.zip")
+    print(f"[quetsal] Best model  -> {best_model_dir / 'best_model.zip'}")
 
     print(
         f"\n[quetsal] To log this run to experiment_log.csv, run:\n"
         f"  python -m quetsal.experiments.track "
-        f"--model {final_path}.zip --mode {args.mode} --notes \"<your notes here>\""
+        f"--model {best_model_dir / 'best_model.zip'} "
+        f"--train-log {log_path} "
+        f"--mode {args.mode} --notes \"<your notes here>\""
     )
 
     tee.close()

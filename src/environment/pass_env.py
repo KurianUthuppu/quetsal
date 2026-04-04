@@ -35,6 +35,7 @@ from qiskit.transpiler.passes.synthesis.unitary_synthesis import UnitarySynthesi
 from quetsal.src.constants import (
     ACTION_LABELS,
     DEPTH_PENALTY_WEIGHT,
+    TERMINAL_BONUS,
     TRUNCATION_PENALTY,
     EDGE_DIM,
     HERON_R2_BASIS,
@@ -51,6 +52,7 @@ from quetsal.src.encoder.dag_encoder import dag_to_pyg
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+
 class _DagOverflowError(RuntimeError):
     """Raised when a DAG exceeds MAX_NODES or MAX_EDGES mid-episode."""
 
@@ -58,12 +60,14 @@ class _DagOverflowError(RuntimeError):
 def _count_2q(dag: DAGCircuit) -> int:
     """Count 2-qubit gates in a DAGCircuit (excluding SKIP_GATES)."""
     return sum(
-        1 for node in dag.topological_op_nodes()
+        1
+        for node in dag.topological_op_nodes()
         if node.op.name not in SKIP_GATES and len(node.qargs) >= 2
     )
 
 
 # ── Environment ──────────────────────────────────────────────────────────────
+
 
 class PassManagerEnv(gym.Env):
     """
@@ -112,28 +116,39 @@ class PassManagerEnv(gym.Env):
         # Variable-size graphs would fail this allocation, so we pad to
         # MAX_NODES / MAX_EDGES and include boolean masks.  The GNN policy
         # uses node_mask / edge_mask to strip padding before message passing.
-        self.observation_space = spaces.Dict({
-            "x":          spaces.Box(-np.inf, np.inf,    shape=(MAX_NODES, NODE_DIM), dtype=np.float32),
-            "edge_index": spaces.Box(0, MAX_NODES - 1,   shape=(2, MAX_EDGES),        dtype=np.int64),
-            "edge_attr":  spaces.Box(-np.inf, np.inf,    shape=(MAX_EDGES, EDGE_DIM), dtype=np.float32),
-            "node_mask":  spaces.Box(0, 1,               shape=(MAX_NODES,),           dtype=np.bool_),
-            "edge_mask":  spaces.Box(0, 1,               shape=(MAX_EDGES,),           dtype=np.bool_),
-        })
+        self.observation_space = spaces.Dict(
+            {
+                "x": spaces.Box(
+                    -np.inf, np.inf, shape=(MAX_NODES, NODE_DIM), dtype=np.float32
+                ),
+                "edge_index": spaces.Box(
+                    0, MAX_NODES - 1, shape=(2, MAX_EDGES), dtype=np.int64
+                ),
+                "edge_attr": spaces.Box(
+                    -np.inf, np.inf, shape=(MAX_EDGES, EDGE_DIM), dtype=np.float32
+                ),
+                "node_mask": spaces.Box(0, 1, shape=(MAX_NODES,), dtype=np.bool_),
+                "edge_mask": spaces.Box(0, 1, shape=(MAX_EDGES,), dtype=np.bool_),
+            }
+        )
 
         # -- Build optimization passes (instantiated once, reused) -------------
         self._passes = self._build_passes()
 
         # -- Infrastructure passes (auto-run after every step) -----------------
-        self._gates_in_basis     = GatesInBasis(self.basis_gates)
-        self._unitary_synthesis  = UnitarySynthesis(self.basis_gates)  # handles unitary blocks from ConsolidateBlocks
-        self._basis_translator   = BasisTranslator(sel, self.basis_gates)
-        self._contract_idle      = ContractIdleWiresInControlFlow()
+        self._gates_in_basis = GatesInBasis(self.basis_gates)
+        self._unitary_synthesis = UnitarySynthesis(
+            self.basis_gates
+        )  # handles unitary blocks from ConsolidateBlocks
+        self._basis_translator = BasisTranslator(sel, self.basis_gates)
+        self._contract_idle = ContractIdleWiresInControlFlow()
 
         # -- Episode state (set in reset) --------------------------------------
         self._dag: Optional[DAGCircuit] = None
         self._initial_2q: int = 0
         self._prev_2q: int = 0
         self._initial_depth: int = 0
+        self._prev_depth: int = 0
         self._step_count: int = 0
         self._last_pass_map: dict[int, int] = {}
         self._rng = np.random.default_rng()
@@ -146,12 +161,14 @@ class PassManagerEnv(gym.Env):
         The last action (DoNothing) is handled as a special case in step().
         """
         return [
-            Optimize1qGatesDecomposition(basis=self.basis_gates),              # 0
-            InverseCancellation(),                                              # 1
-            CommutativeCancellation(),                                          # 2
-            (ConsolidateBlocks(basis_gates=self.basis_gates),                  # 3 macro
-             UnitarySynthesis(self.basis_gates)),
-            RemoveIdentityEquivalent(),                                         # 4
+            Optimize1qGatesDecomposition(basis=self.basis_gates),  # 0
+            InverseCancellation(),  # 1
+            CommutativeCancellation(),  # 2
+            (
+                ConsolidateBlocks(basis_gates=self.basis_gates),  # 3 macro
+                UnitarySynthesis(self.basis_gates),
+            ),
+            RemoveIdentityEquivalent(),  # 4
         ]
 
     def _run_basis_cleanup(self) -> None:
@@ -187,7 +204,7 @@ class PassManagerEnv(gym.Env):
             num_passes=NUM_ACTIONS,
         )
 
-        n = data.x.shape[0]          # real node count
+        n = data.x.shape[0]  # real node count
         e = data.edge_index.shape[1]  # real edge count
 
         if n > MAX_NODES or e > MAX_EDGES:
@@ -215,21 +232,21 @@ class PassManagerEnv(gym.Env):
         edge_mask[:e] = True
 
         return {
-            "x":          x_pad,
+            "x": x_pad,
             "edge_index": ei_pad,
-            "edge_attr":  ea_pad,
-            "node_mask":  node_mask,
-            "edge_mask":  edge_mask,
+            "edge_attr": ea_pad,
+            "node_mask": node_mask,
+            "edge_mask": edge_mask,
         }
 
     def _zero_obs(self) -> dict[str, np.ndarray]:
         """Return an all-zeros observation (used when DAG overflows the buffer)."""
         return {
-            "x":          np.zeros((MAX_NODES, NODE_DIM), dtype=np.float32),
-            "edge_index": np.zeros((2, MAX_EDGES),        dtype=np.int64),
-            "edge_attr":  np.zeros((MAX_EDGES, EDGE_DIM), dtype=np.float32),
-            "node_mask":  np.zeros(MAX_NODES,             dtype=np.bool_),
-            "edge_mask":  np.zeros(MAX_EDGES,             dtype=np.bool_),
+            "x": np.zeros((MAX_NODES, NODE_DIM), dtype=np.float32),
+            "edge_index": np.zeros((2, MAX_EDGES), dtype=np.int64),
+            "edge_attr": np.zeros((MAX_EDGES, EDGE_DIM), dtype=np.float32),
+            "node_mask": np.zeros(MAX_NODES, dtype=np.bool_),
+            "edge_mask": np.zeros(MAX_EDGES, dtype=np.bool_),
         }
 
     def reset(
@@ -255,11 +272,27 @@ class PassManagerEnv(gym.Env):
         self._dag = circuit_to_dag(qc)
 
         # Record initial 2q count and depth (denominators for reward normalisation)
-        self._initial_2q    = _count_2q(self._dag)
-        self._prev_2q       = self._initial_2q
+        self._initial_2q = _count_2q(self._dag)
+        self._prev_2q = self._initial_2q
         self._initial_depth = self._dag.depth()
+        self._prev_depth = self._initial_depth
         self._step_count = 0
         self._last_pass_map = {}
+
+        # Sanity-check dependent variables: circuits must have been filtered
+        # by _transpile_to_opt_stage before reaching the env, so a zero-2q
+        # circuit or a mismatched prev/initial is always a data pipeline bug.
+        assert self._initial_2q > 0, (
+            f"Circuit {idx} has no 2q gates after transpilation — "
+            "should have been filtered by generate_training_circuits()"
+        )
+        assert (
+            self._prev_2q == self._initial_2q
+        ), f"prev_2q ({self._prev_2q}) != initial_2q ({self._initial_2q}) at reset"
+        assert self._step_count == 0, "step_count not zeroed at reset"
+        assert (
+            self._initial_depth > 0
+        ), f"Circuit {idx} has depth 0 at reset — unexpected empty DAG"
 
         obs = self._encode_observation()
         info = {
@@ -298,16 +331,13 @@ class PassManagerEnv(gym.Env):
         # Ignore DoNothing for the first MIN_STEPS_BEFORE_STOP steps so the
         # agent is forced to apply at least one real pass before it can stop.
         # This prevents the untrained policy from collapsing to ep_len=1.
-        if action == NUM_ACTIONS - 1 and self._step_count > MIN_STEPS_BEFORE_STOP:
+        if action == NUM_ACTIONS - 1 and self._step_count >= MIN_STEPS_BEFORE_STOP:
             terminated = True
-            # Terminal bonus: cumulative 2q reduction achieved over the episode.
-            # Without this the agent gets 0 reward for stopping even if it did
-            # useful work in earlier steps, causing eval mean_reward to collapse.
-            current_2q = _count_2q(self._dag)
-            reward = (
-                (self._initial_2q - current_2q) / self._initial_2q
-                if self._initial_2q > 0 else 0.0
-            )
+            # Terminal bonus: fixed reward for choosing to stop at the right time.
+            # A cumulative-reduction bonus double-counts step rewards already
+            # received and teaches the agent to do one pass then bail early.
+            # A small fixed constant rewards timely termination without that bias.
+            reward = TERMINAL_BONUS
             try:
                 obs = self._encode_observation()
             except _DagOverflowError:
@@ -361,16 +391,18 @@ class PassManagerEnv(gym.Env):
         else:
             step_reduction = 0.0
 
-        # Optional depth penalty: normalized change from episode start.
-        # Using (current - initial) / initial so the scale matches step_reduction
-        # (both are fractions of their initial value). Positive = depth grew = penalty.
+        # Optional depth penalty: per-step depth change, normalized by initial depth.
+        # Mirrors step_reduction: (prev - current) / initial_2q for 2q gates.
+        # Positive depth_change = depth grew this step = penalty.
         depth_penalty = 0.0
+        current_depth = self._dag.depth()
         if DEPTH_PENALTY_WEIGHT > 0.0 and self._initial_depth > 0:
-            depth_change = (self._dag.depth() - self._initial_depth) / self._initial_depth
+            depth_change = (current_depth - self._prev_depth) / self._initial_depth
             depth_penalty = -DEPTH_PENALTY_WEIGHT * depth_change
 
         reward = step_reduction + depth_penalty
         self._prev_2q = current_2q
+        self._prev_depth = current_depth
 
         # -- Check truncation --------------------------------------------------
         if self._step_count >= self.max_steps:
@@ -401,8 +433,15 @@ class PassManagerEnv(gym.Env):
             "initial_2q": self._initial_2q,
             "total_reduction": (
                 (self._initial_2q - current_2q) / self._initial_2q
-                if self._initial_2q > 0 else 0.0
+                if self._initial_2q > 0
+                else 0.0
             ),
             "depth": self._dag.depth(),
+            "initial_depth": self._initial_depth,
+            "total_depth_reduction": (
+                (self._initial_depth - self._dag.depth()) / self._initial_depth
+                if self._initial_depth > 0
+                else 0.0
+            ),
             "reward": reward,
         }

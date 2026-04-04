@@ -4,13 +4,15 @@
 #
 # Usage:
 #   python -m quetsal.experiments.track \
-#       --model runs/quetsal/quetsal_final.zip \
+#       --model runs/quetsal/best_model_<timestamp>/best_model.zip \
+#       --train-log runs/quetsal/logs/train_<timestamp>.log \
 #       --mode 1 \
 #       --notes "ent_coef 0.01->0.05, n_steps 512->2048"
 #
+# train.py prints the exact invocation at the end of each run.
 # Reads all lever values from constants.py and train.py defaults.
 # Reads training metrics from the training log file (most recent .log in
-# runs/quetsal/) so they are captured after SB3 has fully flushed output.
+# runs/quetsal/logs/) so they are captured after SB3 has fully flushed output.
 # =============================================================================
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ _COLUMNS = [
     # Meta
     "timestamp", "mode", "notes", "model_path",
     # Environment constants
-    "DEPTH_PENALTY_WEIGHT", "TRUNCATION_PENALTY",
+    "DEPTH_PENALTY_WEIGHT", "TRUNCATION_PENALTY", "TERMINAL_BONUS",
     "MAX_STEPS_PER_EPISODE", "MIN_STEPS_BEFORE_STOP",
     "MAX_NODES", "MAX_EDGES",
     # Training scale
@@ -51,13 +53,15 @@ _COLUMNS = [
 
 _LOG_FILE = "experiments/experiment_log.csv"
 _RUNS_DIR = "runs/quetsal"
+_LOGS_SUBDIR = "logs"
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Log a completed training run to CSV")
-    p.add_argument("--model", type=str, default="runs/quetsal/quetsal_final.zip")
+    p.add_argument("--model", type=str, required=True,
+                   help="Path to best_model.zip (printed by train.py at end of run)")
     p.add_argument("--mode", type=int, default=1, choices=[0, 1])
     p.add_argument("--notes", type=str, default="")
     p.add_argument("--log-file", type=str, default=_LOG_FILE)
@@ -79,6 +83,7 @@ def _collect_levers(mode: int) -> dict:
     row = {
         "DEPTH_PENALTY_WEIGHT":  C.DEPTH_PENALTY_WEIGHT,
         "TRUNCATION_PENALTY":    C.TRUNCATION_PENALTY,
+        "TERMINAL_BONUS":        C.TERMINAL_BONUS,
         "MAX_STEPS_PER_EPISODE": C.MAX_STEPS_PER_EPISODE,
         "MIN_STEPS_BEFORE_STOP": C.MIN_STEPS_BEFORE_STOP,
         "MAX_NODES":             C.MAX_NODES,
@@ -122,7 +127,10 @@ def _collect_levers(mode: int) -> dict:
 # ── Log file parser ───────────────────────────────────────────────────────────
 
 def _find_latest_log() -> Path | None:
-    logs = sorted(Path(_RUNS_DIR).glob("train_*.log"), key=lambda p: p.stat().st_mtime)
+    logs = sorted(
+        (Path(_RUNS_DIR) / _LOGS_SUBDIR).glob("train_*.log"),
+        key=lambda p: p.stat().st_mtime,
+    )
     return logs[-1] if logs else None
 
 

@@ -6,13 +6,14 @@
 #   python -m quetsal.benchmarks.eval --baseline-only
 #
 # Usage (full comparison, requires a trained model):
-#   python -m quetsal.benchmarks.eval --model runs/quetsal/quetsal_final.zip
+#   python -m quetsal.benchmarks.eval --model runs/quetsal/best_model/<ts>/best_model.zip
 #
 # Metrics reported per circuit:
 #   2q_before   : 2q gate count after layout/routing (before optimization)
 #   2q_after    : 2q gate count after the optimizer under test
 #   reduction   : (2q_before - 2q_after) / 2q_before  [0..1]
 #   depth_before / depth_after
+#   steps_taken : number of passes applied (agent only)
 # =============================================================================
 
 from __future__ import annotations
@@ -23,20 +24,21 @@ __all__ = [
     "run_qiskit_baseline",
     "run_agent_baseline",
     "print_summary",
+    "save_per_circuit_csv",
 ]
 
 import argparse
+import csv
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 
 from qiskit import QuantumCircuit
-from qiskit.compiler import transpile
-from qiskit.transpiler import CouplingMap
+from qiskit.transpiler import CouplingMap, PassManager
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
-from qiskit.transpiler import PassManager
 
 from quetsal.src.constants import HERON_R2_BASIS, MAX_STEPS_PER_EPISODE, SKIP_GATES
-from quetsal.src.environment.circuits import generate_training_circuits
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -44,11 +46,13 @@ from quetsal.src.environment.circuits import generate_training_circuits
 @dataclass
 class CircuitResult:
     name: str
+    family: str
     n_qubits: int
     two_q_before: int
     two_q_after: int
     depth_before: int
     depth_after: int
+    steps_taken: int        # passes applied; -1 for Qiskit baselines
     elapsed_s: float
 
     @property
@@ -56,6 +60,12 @@ class CircuitResult:
         if self.two_q_before == 0:
             return 0.0
         return (self.two_q_before - self.two_q_after) / self.two_q_before
+
+    @property
+    def depth_change(self) -> float:
+        if self.depth_before == 0:
+            return 0.0
+        return (self.depth_after - self.depth_before) / self.depth_before
 
 
 @dataclass
@@ -70,10 +80,7 @@ class BenchmarkResult:
 
     @property
     def mean_depth_change(self) -> float:
-        valid = [
-            (r.depth_after - r.depth_before) / r.depth_before
-            for r in self.results if r.depth_before > 0
-        ]
+        valid = [r.depth_change for r in self.results if r.depth_before > 0]
         return sum(valid) / len(valid) if valid else 0.0
 
     @property
@@ -92,70 +99,108 @@ def _count_2q(qc) -> int:
 
 
 def _run_opt_level(qc, opt_level: int, seed: int = 42) -> tuple["QuantumCircuit", float]:
-    """Run Qiskit transpile at a given optimization_level. Returns (circuit, elapsed)."""
+    """Run only the optimization stage at a given opt_level on an already-transpiled circuit.
+
+    Circuits from generate_training_circuits() are already through layout+routing.
+    Skipping init/layout/routing/translation via empty PassManagers ensures the
+    property_set is correctly threaded through pm.run() — unlike pm.optimization.run()
+    which creates an isolated property_set and breaks passes that depend on it.
+    """
     cm = CouplingMap.from_line(qc.num_qubits)
-    t0 = time.time()
-    out = transpile(
-        qc,
+    pm = generate_preset_pass_manager(
+        optimization_level=opt_level,
         basis_gates=HERON_R2_BASIS,
         coupling_map=cm,
-        optimization_level=opt_level,
         seed_transpiler=seed,
     )
+    pm.init = PassManager()
+    pm.layout = PassManager()
+    pm.routing = PassManager()
+    pm.translation = PassManager()
+    pm.scheduling = PassManager()
+    t0 = time.time()
+    out = pm.run(qc)
     return out, time.time() - t0
 
 
-def _get_pre_opt_circuit(qc, seed: int = 42) -> "QuantumCircuit":
-    """Transpile through layout/routing only (no optimization) — same as pass_env."""
-    cm = CouplingMap.from_line(qc.num_qubits)
-    pm = generate_preset_pass_manager(
-        optimization_level=1,
-        basis_gates=HERON_R2_BASIS,
-        coupling_map=cm,
-        seed_transpiler=seed,
+def _generate_tagged_circuits(
+    n_qubits_range: tuple[int, int],
+    count_per_family: int,
+    seed: int,
+) -> list[tuple[QuantumCircuit, str]]:
+    """Generate circuits from all 7 families, each tagged with its family name.
+
+    Mirrors generate_training_circuits() but returns (circuit, family) pairs
+    so the family label is preserved through shuffling.
+    """
+    from quetsal.src.environment.circuits import (
+        generate_clifford_su4_circuits,
+        generate_clifford_su4_su8_circuits,
+        generate_efficient_su2_circuits,
+        generate_iqp_circuits,
+        generate_qaoa_circuits,
+        generate_qv_circuits,
+        generate_real_amplitudes_circuits,
     )
-    pm.optimization = PassManager()
-    pm.scheduling = PassManager()
-    return pm.run(qc)
+    import numpy as np
+
+    basis = HERON_R2_BASIS
+    families = [
+        ("QV",               generate_qv_circuits(n_qubits_range, count_per_family, seed,     basis)),
+        ("QAOA",             generate_qaoa_circuits(n_qubits_range, count_per_family, seed+1,  basis_gates=basis)),
+        ("Clifford-SU4-SU8", generate_clifford_su4_su8_circuits(n_qubits_range, count_per_family, seed+2, basis)),
+        ("Clifford-SU4",     generate_clifford_su4_circuits(n_qubits_range, count_per_family, seed+3, basis_gates=basis)),
+        ("IQP",              generate_iqp_circuits(n_qubits_range, count_per_family, seed+4,  basis)),
+        ("EfficientSU2",     generate_efficient_su2_circuits(n_qubits_range, count_per_family, seed+5, basis_gates=basis)),
+        ("RealAmplitudes",   generate_real_amplitudes_circuits(n_qubits_range, count_per_family, seed+6, basis_gates=basis)),
+    ]
+
+    tagged: list[tuple[QuantumCircuit, str]] = []
+    for family_name, circuits in families:
+        for qc in circuits:
+            tagged.append((qc, family_name))
+
+    rng = np.random.default_rng(seed)
+    rng.shuffle(tagged)
+    return tagged
 
 
 # ── Baseline runner ───────────────────────────────────────────────────────────
 
 def run_qiskit_baseline(
-    circuits,
+    tagged_circuits: list[tuple[QuantumCircuit, str]],
     opt_levels: list[int] = (1, 2, 3),
     seed: int = 42,
 ) -> list[BenchmarkResult]:
-    """Benchmark Qiskit optimization_level=1/2/3 on a list of QuantumCircuits.
+    """Benchmark Qiskit optimization_level=1/2/3 on a list of tagged QuantumCircuits.
 
-    Each circuit is first transpiled through layout+routing only (the same
-    pre-optimization state the RL agent receives), then optimized at each
-    opt_level from that same starting point.
+    Circuits from generate_training_circuits() are already through layout+routing.
+    Only the optimization stage is run at each opt_level from that same starting point.
     """
     benchmarks = {lvl: BenchmarkResult(label=f"opt_level={lvl}") for lvl in opt_levels}
 
-    for i, qc in enumerate(circuits):
-        # Get the unoptimized post-routing circuit (agent's starting point)
-        pre = _get_pre_opt_circuit(qc, seed=seed)
-        two_q_before = _count_2q(pre)
-        depth_before = pre.depth()
+    for i, (qc, family) in enumerate(tagged_circuits):
+        two_q_before = _count_2q(qc)
+        depth_before = qc.depth()
 
         for lvl in opt_levels:
-            optimized, elapsed = _run_opt_level(pre, opt_level=lvl, seed=seed)
+            optimized, elapsed = _run_opt_level(qc, opt_level=lvl, seed=seed)
             two_q_after = _count_2q(optimized)
             depth_after = optimized.depth()
             benchmarks[lvl].results.append(CircuitResult(
                 name=f"circuit_{i}",
+                family=family,
                 n_qubits=qc.num_qubits,
                 two_q_before=two_q_before,
                 two_q_after=two_q_after,
                 depth_before=depth_before,
                 depth_after=depth_after,
+                steps_taken=-1,
                 elapsed_s=elapsed,
             ))
 
         if (i + 1) % 10 == 0:
-            print(f"  [{i+1}/{len(circuits)}] done")
+            print(f"  [{i+1}/{len(tagged_circuits)}] done")
 
     return list(benchmarks.values())
 
@@ -177,28 +222,65 @@ def print_summary(results: list[BenchmarkResult]) -> None:
     print()
 
 
+def save_per_circuit_csv(
+    results: list[BenchmarkResult],
+    out_dir: str = "benchmarks/results",
+) -> None:
+    """Save all optimizers into a single CSV with an 'optimizer' column."""
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = Path(out_dir) / f"benchmark_{timestamp}.csv"
+
+    columns = [
+        "optimizer", "circuit", "family", "n_qubits",
+        "two_q_before", "two_q_after", "two_q_reduction_pct",
+        "depth_before", "depth_after", "depth_change_pct",
+        "steps_taken", "elapsed_s",
+    ]
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        for br in results:
+            for r in br.results:
+                writer.writerow({
+                    "optimizer":           br.label,
+                    "circuit":             r.name,
+                    "family":              r.family,
+                    "n_qubits":            r.n_qubits,
+                    "two_q_before":        r.two_q_before,
+                    "two_q_after":         r.two_q_after,
+                    "two_q_reduction_pct": round(r.reduction * 100, 2),
+                    "depth_before":        r.depth_before,
+                    "depth_after":         r.depth_after,
+                    "depth_change_pct":    round(r.depth_change * 100, 2),
+                    "steps_taken":         "NA" if r.steps_taken == -1 else r.steps_taken,
+                    "elapsed_s":           round(r.elapsed_s, 4),
+                })
+    print(f"[benchmark] Per-circuit CSV -> {path}")
+
+
 # ── Agent runner ─────────────────────────────────────────────────────────────
 
-def run_agent_baseline(model_path: str, circuits, seed: int = 42) -> BenchmarkResult:
-    """Evaluate a trained Quetsal agent on circuits."""
+def run_agent_baseline(
+    model_path: str,
+    tagged_circuits: list[tuple[QuantumCircuit, str]],
+) -> BenchmarkResult:
+    """Evaluate a trained Quetsal agent on tagged circuits."""
     from quetsal.src.agent.ppo_agent import load_agent
     from quetsal.src.environment.pass_env import PassManagerEnv
     from qiskit.converters import dag_to_circuit
 
-    # load_agent needs an env to bind observation/action spaces.
-    # Use a throwaway env built from the first circuit.
-    pre0 = _get_pre_opt_circuit(circuits[0], seed=seed)
-    dummy_env = PassManagerEnv(circuits=[pre0], max_steps=MAX_STEPS_PER_EPISODE)
+    first_qc = tagged_circuits[0][0]
+    dummy_env = PassManagerEnv(circuits=[first_qc], max_steps=MAX_STEPS_PER_EPISODE)
     model = load_agent(model_path, env=dummy_env)
     result = BenchmarkResult(label="Quetsal agent")
 
-    for i, qc in enumerate(circuits):
-        pre = _get_pre_opt_circuit(qc, seed=seed)
-        two_q_before = _count_2q(pre)
-        depth_before = pre.depth()
+    for i, (qc, family) in enumerate(tagged_circuits):
+        two_q_before = _count_2q(qc)
+        depth_before = qc.depth()
 
-        # Run the agent on this single circuit
-        env = PassManagerEnv(circuits=[pre], max_steps=MAX_STEPS_PER_EPISODE)
+        env = PassManagerEnv(circuits=[qc], max_steps=MAX_STEPS_PER_EPISODE)
         obs, _ = env.reset()
         t0 = time.time()
         done = False
@@ -207,22 +289,23 @@ def run_agent_baseline(model_path: str, circuits, seed: int = 42) -> BenchmarkRe
             obs, _, terminated, truncated, _ = env.step(int(action))
             done = terminated or truncated
 
-        # Read final circuit from the env's DAG
         final_qc = dag_to_circuit(env._dag)
         two_q_after = _count_2q(final_qc)
         depth_after = final_qc.depth()
         result.results.append(CircuitResult(
             name=f"circuit_{i}",
+            family=family,
             n_qubits=qc.num_qubits,
             two_q_before=two_q_before,
             two_q_after=two_q_after,
             depth_before=depth_before,
             depth_after=depth_after,
+            steps_taken=env._step_count,
             elapsed_s=time.time() - t0,
         ))
 
         if (i + 1) % 10 == 0:
-            print(f"  [{i+1}/{len(circuits)}] done")
+            print(f"  [{i+1}/{len(tagged_circuits)}] done")
 
     return result
 
@@ -245,6 +328,8 @@ def _parse_args():
     p.add_argument("--max-qubits", type=int, default=8)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--opt-levels", type=int, nargs="+", default=[1, 2, 3])
+    p.add_argument("--save-csv", action="store_true",
+                   help="Save per-circuit results to benchmarks/results/")
     return p.parse_args()
 
 
@@ -252,17 +337,16 @@ def main():
     args = _parse_args()
 
     print(f"[benchmark] Generating {args.n_circuits} circuits per family...")
-    circuits = generate_training_circuits(
+    tagged_circuits = _generate_tagged_circuits(
         n_qubits_range=(args.min_qubits, args.max_qubits),
         count_per_family=args.n_circuits,
         seed=args.seed,
-        basis_gates=HERON_R2_BASIS,
     )
-    print(f"[benchmark] {len(circuits)} circuits ready")
+    print(f"[benchmark] {len(tagged_circuits)} circuits ready")
 
     print(f"[benchmark] Running Qiskit baselines (opt_level={args.opt_levels})...")
     baseline_results = run_qiskit_baseline(
-        circuits, opt_levels=args.opt_levels, seed=args.seed
+        tagged_circuits, opt_levels=args.opt_levels, seed=args.seed
     )
 
     if not args.baseline_only:
@@ -270,10 +354,13 @@ def main():
             print("[benchmark] ERROR: --model required unless --baseline-only is set")
             return
         print(f"[benchmark] Running Quetsal agent: {args.model}")
-        agent_result = run_agent_baseline(args.model, circuits)
+        agent_result = run_agent_baseline(args.model, tagged_circuits)
         baseline_results.append(agent_result)
 
     print_summary(baseline_results)
+
+    if args.save_csv:
+        save_per_circuit_csv(baseline_results)
 
 
 if __name__ == "__main__":

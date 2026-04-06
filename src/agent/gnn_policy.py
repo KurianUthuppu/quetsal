@@ -86,6 +86,12 @@ class GNNFeaturesExtractor(BaseFeaturesExtractor):
             self.convs.append(GINEConv(mlp, edge_dim=EDGE_DIM))
             in_dim = hidden_dim
 
+        # Skip connection projection for layer 0 only:
+        # input x is NODE_DIM=10, conv output is hidden_dim=64 — dimensions
+        # must match before the residual addition.  Layers 1+ are hidden_dim→hidden_dim
+        # so they add directly without projection.
+        self.skip_proj = nn.Linear(NODE_DIM, hidden_dim, bias=False)
+
         # Final projection to latent space
         self.output_proj = nn.Sequential(
             nn.Linear(hidden_dim, latent_dim),
@@ -110,10 +116,13 @@ class GNNFeaturesExtractor(BaseFeaturesExtractor):
         edge_attr = batch.edge_attr.float()
         batch_vec = batch.batch  # node → graph index mapping
 
-        # Message passing
-        for conv in self.convs:
-            x = conv(x, edge_index, edge_attr)
-            x = torch.relu(x)
+        # Message passing with skip connections (residual additions).
+        # Layer 0: input is NODE_DIM=10, output is hidden_dim=64 — project
+        #          the skip path via skip_proj before adding.
+        # Layer 1+: both input and output are hidden_dim=64 — add directly.
+        for i, conv in enumerate(self.convs):
+            h = torch.relu(conv(x, edge_index, edge_attr))
+            x = self.skip_proj(x) + h if i == 0 else x + h
 
         # Graph-level pooling: [total_nodes, hidden_dim] → [B, hidden_dim]
         x = global_mean_pool(x, batch_vec)
@@ -212,8 +221,8 @@ class QuetsalGNNPolicy(ActorCriticPolicy):
             num_layers=3,
             latent_dim=64,
         ),
-        n_steps=512,
-        batch_size=512,   # == n_steps: one minibatch per update (see SB3 batching note)
+        n_steps=1024,
+        batch_size=1024,  # == n_steps: one minibatch per update (see SB3 batching note)
         ...
     )
 

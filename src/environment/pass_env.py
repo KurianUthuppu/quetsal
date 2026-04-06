@@ -35,6 +35,7 @@ from qiskit.transpiler.passes.synthesis.unitary_synthesis import UnitarySynthesi
 from quetsal.src.constants import (
     ACTION_LABELS,
     DEPTH_PENALTY_WEIGHT,
+    STEP_PENALTY,
     TERMINAL_BONUS,
     TRUNCATION_PENALTY,
     EDGE_DIM,
@@ -400,7 +401,9 @@ class PassManagerEnv(gym.Env):
             depth_change = (current_depth - self._prev_depth) / self._initial_depth
             depth_penalty = -DEPTH_PENALTY_WEIGHT * depth_change
 
-        reward = step_reduction + depth_penalty
+        # Step penalty: small fixed cost per pass applied.
+        # Incentivises the agent to stop unless the pass genuinely reduces 2q gates.
+        reward = step_reduction + depth_penalty - STEP_PENALTY
         self._prev_2q = current_2q
         self._prev_depth = current_depth
 

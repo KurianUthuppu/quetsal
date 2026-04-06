@@ -30,7 +30,7 @@ _COLUMNS = [
     # Meta
     "timestamp", "mode", "notes", "model_path",
     # Environment constants
-    "DEPTH_PENALTY_WEIGHT", "TRUNCATION_PENALTY", "TERMINAL_BONUS",
+    "DEPTH_PENALTY_WEIGHT", "TRUNCATION_PENALTY", "TERMINAL_BONUS", "STEP_PENALTY",
     "MAX_STEPS_PER_EPISODE", "MIN_STEPS_BEFORE_STOP",
     "MAX_NODES", "MAX_EDGES",
     # Training scale
@@ -84,6 +84,7 @@ def _collect_levers(mode: int) -> dict:
         "DEPTH_PENALTY_WEIGHT":  C.DEPTH_PENALTY_WEIGHT,
         "TRUNCATION_PENALTY":    C.TRUNCATION_PENALTY,
         "TERMINAL_BONUS":        C.TERMINAL_BONUS,
+        "STEP_PENALTY":          C.STEP_PENALTY,
         "MAX_STEPS_PER_EPISODE": C.MAX_STEPS_PER_EPISODE,
         "MIN_STEPS_BEFORE_STOP": C.MIN_STEPS_BEFORE_STOP,
         "MAX_NODES":             C.MAX_NODES,

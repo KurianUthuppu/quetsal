@@ -28,15 +28,15 @@ from quetsal.src.agent.gnn_policy import QuetsalGNNPolicy
 # n_steps: number of env steps collected per rollout before each PPO update.
 # batch_size must equal n_steps (workaround for variable-size graph obs — see gnn_policy.py).
 # See gnn_policy.py SB3 batching note for explanation.
-DEFAULT_N_STEPS    = 512
-DEFAULT_N_EPOCHS   = 10       # PPO gradient steps per rollout
-DEFAULT_GAMMA      = 0.99     # discount factor
-DEFAULT_LR         = 3e-4     # learning rate
-DEFAULT_CLIP_RANGE    = 0.2    # PPO clip epsilon
-DEFAULT_ENT_COEF      = 0.01  # entropy bonus (encourages exploration)
-DEFAULT_GAE_LAMBDA    = 0.95  # GAE smoothing (0=TD, 1=Monte Carlo)
-DEFAULT_VF_COEF       = 0.5   # value function loss weight
-DEFAULT_MAX_GRAD_NORM = 0.5   # gradient clipping threshold
+DEFAULT_N_STEPS = 1024
+DEFAULT_N_EPOCHS = 5  # PPO gradient steps per rollout
+DEFAULT_GAMMA = 0.99  # discount factor
+DEFAULT_LR = 3e-4  # learning rate
+DEFAULT_CLIP_RANGE = 0.2  # PPO clip epsilon
+DEFAULT_ENT_COEF = 0.03  # entropy bonus (encourages exploration)
+DEFAULT_GAE_LAMBDA = 0.95  # GAE smoothing (0=TD, 1=Monte Carlo)
+DEFAULT_VF_COEF = 0.75  # value function loss weight
+DEFAULT_MAX_GRAD_NORM = 0.5  # gradient clipping threshold
 
 # GNN architecture defaults — must match what GNNFeaturesExtractor expects
 DEFAULT_HIDDEN_DIM = 64
@@ -94,26 +94,26 @@ def make_ppo_agent(
     SB3 PPO model ready for .learn() calls.
     """
     return PPO(
-        policy           = QuetsalGNNPolicy,
-        env              = env,
-        n_steps          = n_steps,
-        batch_size       = n_steps,   # single minibatch = full rollout (see gnn_policy.py)
-        n_epochs         = n_epochs,
-        gamma            = gamma,
-        learning_rate    = learning_rate,
-        clip_range       = clip_range,
-        ent_coef         = ent_coef,
-        gae_lambda       = gae_lambda,
-        vf_coef          = vf_coef,
-        max_grad_norm    = max_grad_norm,
-        policy_kwargs    = dict(
-            hidden_dim = hidden_dim,
-            num_layers = num_layers,
-            latent_dim = latent_dim,
+        policy=QuetsalGNNPolicy,
+        env=env,
+        n_steps=n_steps,
+        batch_size=n_steps,  # single minibatch = full rollout (see gnn_policy.py)
+        n_epochs=n_epochs,
+        gamma=gamma,
+        learning_rate=learning_rate,
+        clip_range=clip_range,
+        ent_coef=ent_coef,
+        gae_lambda=gae_lambda,
+        vf_coef=vf_coef,
+        max_grad_norm=max_grad_norm,
+        policy_kwargs=dict(
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+            latent_dim=latent_dim,
         ),
-        seed             = seed,
-        verbose          = verbose,
-        device           = device,
+        seed=seed,
+        verbose=verbose,
+        device=device,
     )
 
 

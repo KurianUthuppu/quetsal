@@ -98,7 +98,7 @@ def _parse_args() -> argparse.Namespace:
         help="Training circuits per family (7 families total)",
     )
     p.add_argument("--min-qubits", type=int, default=3)
-    p.add_argument("--max-qubits", type=int, default=8)
+    p.add_argument("--max-qubits", type=int, default=10)
     p.add_argument("--circuit-seed", type=int, default=42)
 
     # Training
@@ -117,7 +117,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--clip-range", type=float, default=0.2)
     p.add_argument("--ent-coef", type=float, default=0.05)
     p.add_argument("--gae-lambda", type=float, default=0.95)
-    p.add_argument("--vf-coef", type=float, default=0.5)
+    p.add_argument("--vf-coef", type=float, default=0.75)
     p.add_argument("--max-grad-norm", type=float, default=0.5)
 
     # GNN
@@ -141,8 +141,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", type=str, default="auto")
     p.add_argument("--verbose", type=int, default=1)
-    p.add_argument("--notes", type=str, default="",
-                   help="Free-text annotation logged to experiment_log.csv")
+    p.add_argument(
+        "--notes",
+        type=str,
+        default="",
+        help="Free-text annotation logged to experiment_log.csv",
+    )
 
     args = p.parse_args()
 
@@ -241,7 +245,9 @@ def main() -> None:
         seed=args.circuit_seed + _EVAL_SEED_OFFSET,
         basis_gates=HERON_R2_BASIS,
     )
-    eval_env = Monitor(PassManagerEnv(circuits=eval_circuits, max_steps=MAX_STEPS_PER_EPISODE))
+    eval_env = Monitor(
+        PassManagerEnv(circuits=eval_circuits, max_steps=MAX_STEPS_PER_EPISODE)
+    )
 
     best_model_dir = ckpt_dir / "best_model" / timestamp
     eval_cb = EvalCallback(
@@ -276,7 +282,7 @@ def main() -> None:
         f"  python -m quetsal.experiments.track "
         f"--model {best_model_dir / 'best_model.zip'} "
         f"--train-log {log_path} "
-        f"--mode {args.mode} --notes \"<your notes here>\""
+        f'--mode {args.mode} --notes "<your notes here>"'
     )
 
     tee.close()

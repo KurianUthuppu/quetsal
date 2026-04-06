@@ -14,6 +14,7 @@ __all__ = [
     "SKIP_GATES",
     "DEPTH_PENALTY_WEIGHT",
     "TERMINAL_BONUS",
+    "STEP_PENALTY",
     "TRUNCATION_PENALTY",
     "MAX_NODES",
     "MAX_EDGES",
@@ -108,8 +109,10 @@ SKIP_GATES: frozenset[str] = frozenset(
 DEPTH_PENALTY_WEIGHT: float = (
     0  # normalized depth change penalty; tune during ablations
 )
-TRUNCATION_PENALTY: float = 0    # penalty when episode hits MAX_STEPS without DoNothing
-TERMINAL_BONUS: float = 0.10     # fixed reward for choosing DoNothing at the right time
+TRUNCATION_PENALTY: float = 0  # penalty when episode hits MAX_STEPS without DoNothing
+TERMINAL_BONUS: float = 0.0  # disabled — replaced by STEP_PENALTY
+STEP_PENALTY: float = 0.005  # small cost per non-DoNothing action; incentivises
+# the agent to stop unless a pass genuinely helps
 
 # ---------------------------------------------------------------------------
 # Observation padding — fixed sizes for SB3 rollout buffer compatibility.
@@ -156,8 +159,8 @@ TRAINING_MODE_ARGS: dict[int, dict] = {
     1: {  # FULL — proper training
         "count_per_family": 100,
         "total_steps": 300_000,
-        "n_steps": 512,
-        "n_epochs": 10,
+        "n_steps": 1024,
+        "n_epochs": 5,
         "checkpoint_freq": 10_000,
     },
 }

@@ -69,6 +69,7 @@ def _transpile_to_opt_stage(
     circuits: list[QuantumCircuit],
     basis_gates: list[str],
     seed: int,
+    family: str = "unknown",
 ) -> list[QuantumCircuit]:
     """Transpile circuits through init+layout+routing+translation only.
 
@@ -104,6 +105,10 @@ def _transpile_to_opt_stage(
         if two_q == 0:
             continue  # no 2q gates → reward always 0, skip
         if _circuit_node_count(transpiled) <= int(MAX_NODES * 0.6):
+            # Tag with family so the env and logger can report per-family stats
+            if transpiled.metadata is None:
+                transpiled.metadata = {}
+            transpiled.metadata["family"] = family
             results.append(transpiled)
     return results
 
@@ -151,7 +156,7 @@ def generate_qv_circuits(
         qc = qc.decompose()
         raw.append(qc)
 
-    return _transpile_to_opt_stage(raw, basis, seed)
+    return _transpile_to_opt_stage(raw, basis, seed, family="qv")
 
 
 # ── QAOA MaxCut ──────────────────────────────────────────────────────────────
@@ -213,7 +218,7 @@ def generate_qaoa_circuits(
         qc = _bind_random_params(qc, rng)
         raw.append(qc)
 
-    return _transpile_to_opt_stage(raw, basis, seed)
+    return _transpile_to_opt_stage(raw, basis, seed, family="qaoa")
 
 
 # ── Clifford-SU4-SU8 ────────────────────────────────────────────────────────
@@ -276,7 +281,7 @@ def generate_clifford_su4_su8_circuits(
 
         raw.append(qc)
 
-    return _transpile_to_opt_stage(raw, basis, seed)
+    return _transpile_to_opt_stage(raw, basis, seed, family="clifford_su4_su8")
 
 
 # ── Clifford-SU4 ────────────────────────────────────────────────────────────
@@ -327,7 +332,7 @@ def generate_clifford_su4_circuits(
 
         raw.append(qc)
 
-    return _transpile_to_opt_stage(raw, basis, seed)
+    return _transpile_to_opt_stage(raw, basis, seed, family="clifford_su4")
 
 
 # ── IQP (Instantaneous Quantum Polynomial) ──────────────────────────────────
@@ -361,7 +366,7 @@ def generate_iqp_circuits(
         qc = random_iqp(n, seed=int(rng.integers(0, 2**31)))
         raw.append(qc)
 
-    return _transpile_to_opt_stage(raw, basis, seed)
+    return _transpile_to_opt_stage(raw, basis, seed, family="iqp")
 
 
 # ── EfficientSU2 (hardware-efficient ansatz) ─────────────────────────────────
@@ -398,7 +403,7 @@ def generate_efficient_su2_circuits(
         qc = _bind_random_params(qc, rng)
         raw.append(qc)
 
-    return _transpile_to_opt_stage(raw, basis, seed)
+    return _transpile_to_opt_stage(raw, basis, seed, family="efficient_su2")
 
 
 # ── RealAmplitudes (real-valued ansatz) ──────────────────────────────────────
@@ -435,7 +440,7 @@ def generate_real_amplitudes_circuits(
         qc = _bind_random_params(qc, rng)
         raw.append(qc)
 
-    return _transpile_to_opt_stage(raw, basis, seed)
+    return _transpile_to_opt_stage(raw, basis, seed, family="real_amplitudes")
 
 
 # ── Convenience: mixed training pool ─────────────────────────────────────────

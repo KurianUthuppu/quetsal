@@ -57,8 +57,8 @@ ACTION_LABELS: list[str] = [
     #              Qiskit never uses CB without US;
     #              combining removes the 2-step credit
     #              assignment problem entirely.
-    "RemoveIdentityEquivalent",  # 4  L2,L3    — approx-aware identity removal
-    "DoNothing",  # 5  terminate episode
+    # "RemoveIdentityEquivalent",  # 4  L2,L3    — approx-aware identity removal (disabled)
+    "DoNothing",  # 4  terminate episode
 ]
 NUM_ACTIONS: int = len(ACTION_LABELS)
 
@@ -107,11 +107,13 @@ SKIP_GATES: frozenset[str] = frozenset(
 # Reward
 # ---------------------------------------------------------------------------
 DEPTH_PENALTY_WEIGHT: float = (
-    0  # normalized depth change penalty; tune during ablations
+    0.03  # normalized depth change penalty; tune during ablations
 )
-TRUNCATION_PENALTY: float = 0  # penalty when episode hits MAX_STEPS without DoNothing
-TERMINAL_BONUS: float = 0.0  # disabled — replaced by STEP_PENALTY
-STEP_PENALTY: float = 0.005  # small cost per non-DoNothing action; incentivises
+TRUNCATION_PENALTY: float = (
+    0.05  # penalty when episode hits MAX_STEPS without DoNothing
+)
+TERMINAL_BONUS: float = 0.1
+STEP_PENALTY: float = 0.001  # small cost per non-DoNothing action; incentivises
 # the agent to stop unless a pass genuinely helps
 
 # ---------------------------------------------------------------------------
@@ -134,7 +136,7 @@ MAX_EDGES: int = 6000
 # Episode limits
 # ---------------------------------------------------------------------------
 MAX_STEPS_PER_EPISODE: int = 20
-MIN_STEPS_BEFORE_STOP: int = 2  # DoNothing is ignored until this many steps have run
+MIN_STEPS_BEFORE_STOP: int = 3  # DoNothing is ignored until this many steps have run
 
 # ---------------------------------------------------------------------------
 # Training mode
@@ -153,7 +155,7 @@ TRAINING_MODE_ARGS: dict[int, dict] = {
         "count_per_family": 3,
         "total_steps": 2048,
         "n_steps": 512,
-        "n_epochs": 5,
+        "n_epochs": 3,
         "checkpoint_freq": 2048,
     },
     1: {  # FULL — proper training

@@ -60,11 +60,11 @@ class _Tee:
 from stable_baselines3.common.callbacks import (
     CallbackList,
     CheckpointCallback,
-    EvalCallback,
 )
 from stable_baselines3.common.monitor import Monitor
 
 from quetsal.src.agent.ppo_agent import make_ppo_agent, save_agent
+from quetsal.training.callbacks import LoggingEvalCallback, PassLogWrapper, PassLoggerCallback
 from quetsal.src.constants import (
     HERON_R2_BASIS,
     MAX_STEPS_PER_EPISODE,
@@ -239,18 +239,24 @@ def main() -> None:
     # Eval env uses the same circuit pool but a fixed seed subset
     # so evaluation episodes are reproducible across checkpoints
     _EVAL_SEED_OFFSET = 999  # ensures eval circuits differ from the training pool
+    _eval_count = max(2, int(args.count_per_family * 0.20))  # 20% of training, min 2/family
     eval_circuits = generate_training_circuits(
         n_qubits_range=(args.min_qubits, args.max_qubits),
-        count_per_family=20,  # smaller eval pool
+        count_per_family=_eval_count,
         seed=args.circuit_seed + _EVAL_SEED_OFFSET,
         basis_gates=HERON_R2_BASIS,
     )
+    print(f"[quetsal] Eval pool: {len(eval_circuits)} circuits ({_eval_count}/family requested, {len(eval_circuits)//7} avg after filtering)")
     eval_env = Monitor(
-        PassManagerEnv(circuits=eval_circuits, max_steps=MAX_STEPS_PER_EPISODE)
+        PassLogWrapper(
+            PassManagerEnv(circuits=eval_circuits, max_steps=MAX_STEPS_PER_EPISODE)
+        )
     )
 
+    _pass_log_path = Path("experiments") / f"pass_log_{timestamp}.csv"
+
     best_model_dir = ckpt_dir / "best_model" / timestamp
-    eval_cb = EvalCallback(
+    eval_cb = LoggingEvalCallback(
         eval_env=eval_env,
         best_model_save_path=str(best_model_dir),
         log_path=str(ckpt_dir / "logs" / f"eval_{timestamp}"),
@@ -258,9 +264,17 @@ def main() -> None:
         n_eval_episodes=len(eval_circuits),
         deterministic=True,
         verbose=1,
+        pass_log_path=_pass_log_path,
+        pass_log_verbose=args.verbose,
     )
 
-    callbacks = CallbackList([checkpoint_cb, eval_cb])
+    pass_logger_cb = PassLoggerCallback(
+        log_freq=args.checkpoint_freq,
+        save_path=str(_pass_log_path),
+        verbose=args.verbose,
+    )
+
+    callbacks = CallbackList([checkpoint_cb, eval_cb, pass_logger_cb])
 
     # ── 5. Train ──────────────────────────────────────────────────────────────
     print(f"[quetsal] Training for {args.total_steps:,} steps -> {ckpt_dir}")

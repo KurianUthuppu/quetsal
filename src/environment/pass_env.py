@@ -27,7 +27,7 @@ from qiskit.transpiler.passes.optimization import (
     CommutativeCancellation,
     ConsolidateBlocks,
     InverseCancellation,
-    RemoveIdentityEquivalent,
+    # RemoveIdentityEquivalent,  # disabled — not in current action space
     ContractIdleWiresInControlFlow,
 )
 from qiskit.transpiler.passes.synthesis.unitary_synthesis import UnitarySynthesis
@@ -152,6 +152,7 @@ class PassManagerEnv(gym.Env):
         self._prev_depth: int = 0
         self._step_count: int = 0
         self._last_pass_map: dict[int, int] = {}
+        self._current_family: str = "unknown"
         self._rng = np.random.default_rng()
 
     def _build_passes(self) -> list:
@@ -169,7 +170,8 @@ class PassManagerEnv(gym.Env):
                 ConsolidateBlocks(basis_gates=self.basis_gates),  # 3 macro
                 UnitarySynthesis(self.basis_gates),
             ),
-            RemoveIdentityEquivalent(),  # 4
+            # RemoveIdentityEquivalent(),  # 4 — disabled, not in current action space
+            # DoNothing is action 4, handled as special case in step()
         ]
 
     def _run_basis_cleanup(self) -> None:
@@ -268,6 +270,9 @@ class PassManagerEnv(gym.Env):
         # Sample a circuit from the pool
         idx = self._rng.integers(0, len(self.circuits))
         qc = self.circuits[idx]
+
+        # Track circuit family for per-family pass logging
+        self._current_family = (qc.metadata or {}).get("family", "unknown")
 
         # Convert to DAG
         self._dag = circuit_to_dag(qc)
@@ -431,6 +436,7 @@ class PassManagerEnv(gym.Env):
         current_2q = _count_2q(self._dag)
         return {
             "action_name": ACTION_LABELS[action],
+            "family": self._current_family,
             "step": self._step_count,
             "current_2q": current_2q,
             "initial_2q": self._initial_2q,

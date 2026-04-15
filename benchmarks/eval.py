@@ -123,15 +123,24 @@ def _run_opt_level(qc, opt_level: int, seed: int = 42) -> tuple["QuantumCircuit"
     return out, time.time() - t0
 
 
+_NONPARAM_FAMILIES = {"QV", "Clifford-SU4", "Clifford-SU4-SU8"}
+
+_ALL_FAMILY_KEYS = [
+    "QV", "QAOA", "Clifford-SU4-SU8", "Clifford-SU4",
+    "IQP", "EfficientSU2", "RealAmplitudes",
+]
+
+
 def _generate_tagged_circuits(
     n_qubits_range: tuple[int, int],
     count_per_family: int,
     seed: int,
+    families: set[str] | None = None,
 ) -> list[tuple[QuantumCircuit, str]]:
-    """Generate circuits from all 7 families, each tagged with its family name.
+    """Generate circuits from the requested families, each tagged with its family name.
 
-    Mirrors generate_training_circuits() but returns (circuit, family) pairs
-    so the family label is preserved through shuffling.
+    ``families`` is a set of family keys (e.g. ``{"QV", "Clifford-SU4"}``).
+    Pass ``None`` (default) to include all 7 families.
     """
     from quetsal.src.environment.circuits import (
         generate_clifford_su4_circuits,
@@ -145,7 +154,7 @@ def _generate_tagged_circuits(
     import numpy as np
 
     basis = HERON_R2_BASIS
-    families = [
+    all_families = [
         ("QV",               generate_qv_circuits(n_qubits_range, count_per_family, seed,     basis)),
         ("QAOA",             generate_qaoa_circuits(n_qubits_range, count_per_family, seed+1,  basis_gates=basis)),
         ("Clifford-SU4-SU8", generate_clifford_su4_su8_circuits(n_qubits_range, count_per_family, seed+2, basis)),
@@ -156,7 +165,9 @@ def _generate_tagged_circuits(
     ]
 
     tagged: list[tuple[QuantumCircuit, str]] = []
-    for family_name, circuits in families:
+    for family_name, circuits in all_families:
+        if families is not None and family_name not in families:
+            continue
         for qc in circuits:
             tagged.append((qc, family_name))
 
@@ -328,6 +339,15 @@ def _parse_args():
     p.add_argument("--max-qubits", type=int, default=8)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--opt-levels", type=int, nargs="+", default=[1, 2, 3])
+    p.add_argument(
+        "--families", type=str, nargs="+", default=None,
+        metavar="FAMILY",
+        help=(
+            "Families to include. Use 'nonparam' as a shorthand for "
+            "QV Clifford-SU4 Clifford-SU4-SU8. "
+            f"Available: {', '.join(_ALL_FAMILY_KEYS)}"
+        ),
+    )
     p.add_argument("--save-csv", action="store_true",
                    help="Save per-circuit results to benchmarks/results/")
     return p.parse_args()
@@ -336,11 +356,28 @@ def _parse_args():
 def main():
     args = _parse_args()
 
-    print(f"[benchmark] Generating {args.n_circuits} circuits per family...")
+    # Resolve --families shorthand
+    families: set[str] | None = None
+    if args.families is not None:
+        expanded: list[str] = []
+        for f in args.families:
+            if f.lower() == "nonparam":
+                expanded.extend(_NONPARAM_FAMILIES)
+            else:
+                expanded.append(f)
+        families = set(expanded)
+        unknown = families - set(_ALL_FAMILY_KEYS)
+        if unknown:
+            print(f"[benchmark] ERROR: unknown families: {unknown}. Valid: {_ALL_FAMILY_KEYS}")
+            return
+
+    family_label = ", ".join(sorted(families)) if families else "all 7"
+    print(f"[benchmark] Generating {args.n_circuits} circuits per family ({family_label})...")
     tagged_circuits = _generate_tagged_circuits(
         n_qubits_range=(args.min_qubits, args.max_qubits),
         count_per_family=args.n_circuits,
         seed=args.seed,
+        families=families,
     )
     print(f"[benchmark] {len(tagged_circuits)} circuits ready")
 

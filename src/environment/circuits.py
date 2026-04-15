@@ -38,6 +38,7 @@ __all__ = [
     "generate_efficient_su2_circuits",
     "generate_real_amplitudes_circuits",
     "generate_training_circuits",
+    "generate_weighted_circuits",
 ]
 
 import numpy as np
@@ -490,6 +491,67 @@ def generate_training_circuits(
     )
 
     # Shuffle so the env doesn't see families in blocks
+    rng = np.random.default_rng(seed)
+    rng.shuffle(circuits)
+    return circuits
+
+
+# ── Weighted pool (used by curriculum learning) ───────────────────────────────
+
+# Maps family name → generator function (common signature subset)
+_FAMILY_GENERATORS: dict = {}  # populated after all generators are defined
+
+
+def generate_weighted_circuits(
+    families: list[str],
+    family_weights: dict[str, float],
+    total_count: int,
+    n_qubits_range: tuple[int, int] = (3, 8),
+    seed: int = 42,
+    basis_gates: list[str] | None = None,
+) -> list[QuantumCircuit]:
+    """Generate a circuit pool with explicit per-family weights.
+
+    Unlike generate_training_circuits() which uses equal counts per family,
+    this function allocates circuits proportionally to the given weights.
+    Used by CurriculumController to implement staged and blended training pools.
+
+    Parameters
+    ----------
+    families      : ordered list of family names to include.
+    family_weights: dict mapping family name → sampling weight (need not sum to 1;
+                    they are normalised internally).
+    total_count   : total circuits to generate (distributed proportionally).
+    n_qubits_range: (min, max) inclusive qubit range.
+    seed          : base RNG seed; each family gets seed + family_index.
+    basis_gates   : target basis (default: HERON_R2_BASIS).
+    """
+    global _FAMILY_GENERATORS
+    if not _FAMILY_GENERATORS:
+        _FAMILY_GENERATORS = {
+            "qv": generate_qv_circuits,
+            "qaoa": generate_qaoa_circuits,
+            "clifford_su4_su8": generate_clifford_su4_su8_circuits,
+            "clifford_su4": generate_clifford_su4_circuits,
+            "iqp": generate_iqp_circuits,
+            "efficient_su2": generate_efficient_su2_circuits,
+            "real_amplitudes": generate_real_amplitudes_circuits,
+        }
+
+    basis = basis_gates or HERON_R2_BASIS
+
+    # Normalise weights
+    total_w = sum(family_weights.get(f, 0.0) for f in families)
+    if total_w == 0:
+        raise ValueError(f"All family weights are zero for families={families}")
+
+    circuits = []
+    for i, family in enumerate(families):
+        w = family_weights.get(family, 0.0)
+        count = max(1, round(w / total_w * total_count))
+        gen = _FAMILY_GENERATORS[family]
+        circuits.extend(gen(n_qubits_range, count, seed + i, basis_gates=basis))
+
     rng = np.random.default_rng(seed)
     rng.shuffle(circuits)
     return circuits

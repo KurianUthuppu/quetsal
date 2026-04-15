@@ -93,6 +93,7 @@ class PassManagerEnv(gym.Env):
         circuits: list,
         max_steps: int = MAX_STEPS_PER_EPISODE,
         basis_gates: list[str] | None = None,
+        donothing_early_penalty: float = 0.0,
     ):
         """
         Parameters
@@ -101,13 +102,17 @@ class PassManagerEnv(gym.Env):
                       through layout + routing + translation (i.e., ready for
                       the optimization stage).  The env samples one per episode.
         max_steps   : maximum optimization passes per episode before truncation.
-        basis_gates : target basis gates.  Defaults to HERON_R2_BASIS.
+        basis_gates             : target basis gates.  Defaults to HERON_R2_BASIS.
+        donothing_early_penalty : stage 3 curriculum penalty applied when the agent
+                                  selects DoNothing before MIN_STEPS_BEFORE_STOP.
+                                  0.0 (default) disables the penalty.
         """
         super().__init__()
 
         self.circuits = circuits
         self.max_steps = max_steps
         self.basis_gates = basis_gates or HERON_R2_BASIS
+        self.donothing_early_penalty = donothing_early_penalty
 
         # -- Action space: 7 discrete actions (6 passes + DoNothing) -----------
         self.action_space = spaces.Discrete(NUM_ACTIONS)
@@ -353,9 +358,9 @@ class PassManagerEnv(gym.Env):
 
         # -- Apply the selected optimization pass ------------------------------
         # If DoNothing was suppressed (too early), treat it as a no-op step:
-        # skip pass application and give zero reward for this step.
+        # skip pass application and apply optional early-exit penalty (stage 3).
         if action == NUM_ACTIONS - 1:
-            reward = 0.0
+            reward = -self.donothing_early_penalty  # stored positive, negated here (0.0 unless stage 3)
             self._prev_2q = _count_2q(self._dag)
             if self._step_count >= self.max_steps:
                 truncated = True

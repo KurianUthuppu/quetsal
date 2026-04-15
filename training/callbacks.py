@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-__all__ = ["PassLogWrapper", "LoggingEvalCallback", "PassLoggerCallback"]
+__all__ = ["PassLogWrapper", "LoggingEvalCallback", "PassLoggerCallback", "CurriculumCallback"]
 
 import csv
 from collections import defaultdict, Counter
@@ -234,3 +234,76 @@ class PassLoggerCallback(BaseCallback):
             self._last_flush = self.num_timesteps
 
         return True
+
+
+# ── Curriculum callback ───────────────────────────────────────────────────────
+
+
+class CurriculumCallback(BaseCallback):
+    """Fires after each eval round and calls CurriculumController.check_and_promote().
+
+    Reads eval_mean_reward from LoggingEvalCallback.last_mean_reward and
+    DoNothing-per-episode from the PassLogWrapper attached to the eval env.
+    Also drives stage 2 blend updates and entropy decay each eval checkpoint.
+
+    Parameters
+    ----------
+    curriculum      : CurriculumController instance.
+    eval_cb         : the LoggingEvalCallback so we can read last_mean_reward.
+    eval_log_wrapper: the PassLogWrapper around the eval env (for DoNothing count).
+    eval_freq       : must match EvalCallback.eval_freq to detect eval timing.
+    verbose         : 0 = silent, 1 = print stage info.
+    """
+
+    def __init__(
+        self,
+        curriculum,  # CurriculumController — avoid circular import with TYPE_CHECKING
+        eval_cb,     # LoggingEvalCallback
+        eval_log_wrapper: "PassLogWrapper",
+        eval_freq: int,
+        verbose: int = 1,
+    ) -> None:
+        super().__init__(verbose=verbose)
+        self.curriculum = curriculum
+        self.eval_cb = eval_cb
+        self.eval_log_wrapper = eval_log_wrapper
+        self.eval_freq = eval_freq
+        self._stage_start_steps: int = 0
+
+    def _on_step(self) -> bool:
+        # Mirror EvalCallback's condition — fire just after eval ran
+        if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
+            eval_mean_reward = getattr(self.eval_cb, "last_mean_reward", None)
+            if eval_mean_reward is None:
+                return True  # eval hasn't run yet
+
+            # DoNothing per episode: read from the PassLogWrapper's latest counts
+            # (wrapper resets after each flush, so this reflects the latest eval round)
+            donothing_label = "DoNothing"
+            total_episodes = sum(self.eval_log_wrapper._episodes.values())
+            donothing_total = sum(
+                self.eval_log_wrapper._counts[f].get(donothing_label, 0)
+                for f in self.eval_log_wrapper._counts
+            )
+            donothing_per_ep = donothing_total / max(total_episodes, 1)
+
+            # Stage 2-specific: update blend and entropy decay every eval
+            if self.curriculum.stage == 2:
+                self.curriculum.update_stage2_blend(eval_mean_reward)
+                steps_in_stage = self.num_timesteps - self._stage_start_steps
+                max_steps = sum(
+                    CURRICULUM_STAGES[2].get("max_steps", 400_000)
+                    for _ in [1]  # single lookup
+                )
+                self.curriculum.update_stage2_entropy(steps_in_stage, max_steps)
+
+            # Check promotion
+            promoted = self.curriculum.check_and_promote(eval_mean_reward, donothing_per_ep)
+            if promoted:
+                self._stage_start_steps = self.num_timesteps
+
+        return True
+
+
+# Avoid circular import — import here so CurriculumCallback can reference the constant
+from quetsal.src.constants import CURRICULUM_STAGES  # noqa: E402

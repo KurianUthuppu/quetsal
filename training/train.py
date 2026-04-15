@@ -64,8 +64,15 @@ from stable_baselines3.common.callbacks import (
 from stable_baselines3.common.monitor import Monitor
 
 from quetsal.src.agent.ppo_agent import make_ppo_agent, save_agent
-from quetsal.training.callbacks import LoggingEvalCallback, PassLogWrapper, PassLoggerCallback
+from quetsal.training.callbacks import (
+    CurriculumCallback,
+    LoggingEvalCallback,
+    PassLogWrapper,
+    PassLoggerCallback,
+)
+from quetsal.training.curriculum import CurriculumController
 from quetsal.src.constants import (
+    CURRICULUM_STAGES,
     HERON_R2_BASIS,
     MAX_STEPS_PER_EPISODE,
     TRAINING_MODE,
@@ -142,6 +149,20 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--device", type=str, default="auto")
     p.add_argument("--verbose", type=int, default=1)
     p.add_argument(
+        "--curriculum",
+        action="store_true",
+        default=False,
+        help="Enable staged curriculum learning (stage 1→2→3 with promotion gates)",
+    )
+    p.add_argument(
+        "--max-stage",
+        type=int,
+        default=3,
+        choices=[1, 2, 3],
+        help="Highest curriculum stage to enter (default 3 = all stages). "
+             "Use --max-stage 1 to train on non-parametric families only.",
+    )
+    p.add_argument(
         "--notes",
         type=str,
         default="",
@@ -150,11 +171,16 @@ def _parse_args() -> argparse.Namespace:
 
     args = p.parse_args()
 
-    # Apply mode defaults for args that were not explicitly set (still None)
+    # Apply mode defaults for args that were not explicitly set (still None).
+    # Skip non-scalar entries (e.g. curriculum_smoke) — those are consumed
+    # directly from TRAINING_MODE_ARGS, not surfaced as argparse attributes.
     mode_defaults = TRAINING_MODE_ARGS[args.mode]
     for key, val in mode_defaults.items():
-        if getattr(args, key) is None:
-            setattr(args, key, val)
+        if isinstance(val, dict):
+            continue  # not a CLI arg
+        attr = key.replace("-", "_")
+        if getattr(args, attr, None) is None:
+            setattr(args, attr, val)
 
     return args
 
@@ -178,15 +204,29 @@ def main() -> None:
 
     # ── 1. Generate circuits ──────────────────────────────────────────────────
     print(
-        f"[quetsal] Generating training circuits ({args.count_per_family} per family)..."
+        f"[quetsal] Generating training circuits "
+        f"({'stage 1 curriculum — non-parametric only' if args.curriculum else f'{args.count_per_family} per family'})..."
     )
     t0 = time.time()
-    circuits = generate_training_circuits(
-        n_qubits_range=(args.min_qubits, args.max_qubits),
-        count_per_family=args.count_per_family,
-        seed=args.circuit_seed,
-        basis_gates=HERON_R2_BASIS,
-    )
+    if args.curriculum:
+        from quetsal.src.environment.circuits import generate_weighted_circuits
+        _s1 = CURRICULUM_STAGES[1]
+        _s1_total = args.count_per_family * len(_s1["families"])
+        circuits = generate_weighted_circuits(
+            families=_s1["families"],
+            family_weights=_s1["family_weights"],
+            total_count=_s1_total,
+            n_qubits_range=(args.min_qubits, args.max_qubits),
+            seed=args.circuit_seed,
+            basis_gates=HERON_R2_BASIS,
+        )
+    else:
+        circuits = generate_training_circuits(
+            n_qubits_range=(args.min_qubits, args.max_qubits),
+            count_per_family=args.count_per_family,
+            seed=args.circuit_seed,
+            basis_gates=HERON_R2_BASIS,
+        )
     print(f"[quetsal] {len(circuits)} circuits ready in {time.time() - t0:.1f}s")
 
     # ── 2. Instantiate environment ────────────────────────────────────────────
@@ -196,6 +236,9 @@ def main() -> None:
     )
 
     # ── 3. Build PPO agent ────────────────────────────────────────────────────
+    # Curriculum stage 1 overrides ent_coef to the stage-specific value
+    _ent_coef = CURRICULUM_STAGES[1]["ent_coef"] if args.curriculum else args.ent_coef
+
     model = make_ppo_agent(
         env=env,
         n_steps=args.n_steps,
@@ -203,7 +246,7 @@ def main() -> None:
         gamma=args.gamma,
         learning_rate=args.lr,
         clip_range=args.clip_range,
-        ent_coef=args.ent_coef,
+        ent_coef=_ent_coef,
         gae_lambda=args.gae_lambda,
         vf_coef=args.vf_coef,
         max_grad_norm=args.max_grad_norm,
@@ -236,22 +279,33 @@ def main() -> None:
         verbose=1,
     )
 
-    # Eval env uses the same circuit pool but a fixed seed subset
-    # so evaluation episodes are reproducible across checkpoints
-    _EVAL_SEED_OFFSET = 999  # ensures eval circuits differ from the training pool
-    _eval_count = max(2, int(args.count_per_family * 0.20))  # 20% of training, min 2/family
-    eval_circuits = generate_training_circuits(
-        n_qubits_range=(args.min_qubits, args.max_qubits),
-        count_per_family=_eval_count,
-        seed=args.circuit_seed + _EVAL_SEED_OFFSET,
-        basis_gates=HERON_R2_BASIS,
-    )
-    print(f"[quetsal] Eval pool: {len(eval_circuits)} circuits ({_eval_count}/family requested, {len(eval_circuits)//7} avg after filtering)")
-    eval_env = Monitor(
-        PassLogWrapper(
-            PassManagerEnv(circuits=eval_circuits, max_steps=MAX_STEPS_PER_EPISODE)
+    # Eval env — uses stage 1 families when curriculum, else full pool
+    _EVAL_SEED_OFFSET = 999
+    _eval_count = max(2, int(args.count_per_family * 0.20))
+    if args.curriculum:
+        from quetsal.src.environment.circuits import generate_weighted_circuits
+        _s1 = CURRICULUM_STAGES[1]
+        _s1_eval_total = max(len(_s1["families"]) * 2, int(_s1_total * 0.20))
+        eval_circuits = generate_weighted_circuits(
+            families=_s1["families"],
+            family_weights=_s1["family_weights"],
+            total_count=_s1_eval_total,
+            n_qubits_range=(args.min_qubits, args.max_qubits),
+            seed=args.circuit_seed + _EVAL_SEED_OFFSET,
+            basis_gates=HERON_R2_BASIS,
         )
-    )
+    else:
+        eval_circuits = generate_training_circuits(
+            n_qubits_range=(args.min_qubits, args.max_qubits),
+            count_per_family=_eval_count,
+            seed=args.circuit_seed + _EVAL_SEED_OFFSET,
+            basis_gates=HERON_R2_BASIS,
+        )
+    print(f"[quetsal] Eval pool: {len(eval_circuits)} circuits ({_eval_count}/family requested, {len(eval_circuits)//7} avg after filtering)")
+
+    _inner_eval_env = PassManagerEnv(circuits=eval_circuits, max_steps=MAX_STEPS_PER_EPISODE)
+    _pass_log_wrapper = PassLogWrapper(_inner_eval_env)
+    eval_env = Monitor(_pass_log_wrapper)
 
     _pass_log_path = Path("experiments") / f"pass_log_{timestamp}.csv"
 
@@ -274,7 +328,33 @@ def main() -> None:
         verbose=args.verbose,
     )
 
-    callbacks = CallbackList([checkpoint_cb, eval_cb, pass_logger_cb])
+    cb_list = [checkpoint_cb, eval_cb, pass_logger_cb]
+
+    if args.curriculum:
+        curriculum_ctrl = CurriculumController(
+            model=model,
+            train_env=env,
+            eval_env_inner=_inner_eval_env,
+            n_qubits_range=(args.min_qubits, args.max_qubits),
+            count_per_family=args.count_per_family,
+            circuit_seed=args.circuit_seed,
+            ckpt_dir=ckpt_dir,
+            verbose=args.verbose,
+            smoke=(args.mode == 0),  # lower promotion gates for quick smoke-test
+            max_stage=args.max_stage,
+        )
+        curriculum_cb = CurriculumCallback(
+            curriculum=curriculum_ctrl,
+            eval_cb=eval_cb,
+            eval_log_wrapper=_pass_log_wrapper,
+            eval_freq=args.checkpoint_freq,
+            verbose=args.verbose,
+        )
+        cb_list.append(curriculum_cb)
+        _stage_cap = f" (capped at Stage {args.max_stage})" if args.max_stage < 3 else ""
+        print(f"[quetsal] Curriculum learning enabled — starting at Stage 1{_stage_cap}")
+
+    callbacks = CallbackList(cb_list)
 
     # ── 5. Train ──────────────────────────────────────────────────────────────
     print(f"[quetsal] Training for {args.total_steps:,} steps -> {ckpt_dir}")

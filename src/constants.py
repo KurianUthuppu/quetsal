@@ -22,6 +22,7 @@ __all__ = [
     "MIN_STEPS_BEFORE_STOP",
     "TRAINING_MODE",
     "TRAINING_MODE_ARGS",
+    "CURRICULUM_STAGES",
 ]
 
 # ---------------------------------------------------------------------------
@@ -156,7 +157,14 @@ TRAINING_MODE_ARGS: dict[int, dict] = {
         "total_steps": 2048,
         "n_steps": 512,
         "n_epochs": 3,
-        "checkpoint_freq": 2048,
+        "checkpoint_freq": 512,  # fire eval 4× so curriculum callback runs multiple times
+        # curriculum smoke-test: lower promotion gates so all 3 stages run in 2048 steps
+        "curriculum_smoke": {
+            "eval_mean_reward_min": 0.0,  # always passes
+            "donothing_per_ep_max": 9999,  # always passes
+            "reward_delta_max": 9999,  # always passes
+            "consecutive_evals": 1,  # promote after 1 passing eval, not 2
+        },
     },
     1: {  # FULL — proper training
         "count_per_family": 100,
@@ -164,5 +172,82 @@ TRAINING_MODE_ARGS: dict[int, dict] = {
         "n_steps": 1024,
         "n_epochs": 5,
         "checkpoint_freq": 10_000,
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Curriculum learning — staged training schedule
+#
+# Stage 1 — Foundation: non-parametric families only (no random angles).
+#   Agent learns structural optimisation (cancellation, consolidation) on
+#   fixed-gate circuits before seeing parametric noise.
+#   Promoted when eval_mean_reward > 0.25 AND donothing_per_ep < 1.5
+#   for 2 consecutive eval checkpoints.
+#
+# Stage 2 — Parametric exposure: blend in QAOA/IQP/EfficientSU2 gradually.
+#   Starts at 30% parametric mix, increases +10% per passing eval checkpoint
+#   (max 60%). Entropy decays 0.05 → 0.02 over the stage.
+#   Promoted when reward stabilises (δ < 0.02 over last 2 evals).
+#
+# Stage 3 — Balanced fine-tune: all 7 families, equal weight.
+#   Low LR (1e-4), tight clip range (0.1), early-exit penalty for DoNothing
+#   before MIN_STEPS_BEFORE_STOP to prevent lazy termination.
+#
+# Used only when train.py is invoked with --curriculum.
+# ---------------------------------------------------------------------------
+_ALL_FAMILIES = [
+    "qv",
+    "qaoa",
+    "clifford_su4_su8",
+    "clifford_su4",
+    "iqp",
+    "efficient_su2",
+    "real_amplitudes",
+]
+
+CURRICULUM_STAGES: dict[int, dict] = {
+    1: {
+        "families": ["qv", "clifford_su4", "clifford_su4_su8"],
+        "family_weights": {"qv": 0.40, "clifford_su4": 0.35, "clifford_su4_su8": 0.25},
+        "max_steps": 150_000,  # foundation — non-parametric structural learning
+        "ent_coef": 0.03,
+        "promotion": {
+            "eval_mean_reward_min": 0.25,  # unified name across all stages
+            "donothing_per_ep_max": 1.5,
+            "consecutive_evals": 2,
+        },
+    },
+    2: {
+        "families": [
+            "qv",
+            "clifford_su4",
+            "clifford_su4_su8",
+            "qaoa",
+            "iqp",
+            "efficient_su2",
+        ],
+        "nonparam_families": ["qv", "clifford_su4", "clifford_su4_su8"],
+        "param_families": ["qaoa", "iqp", "efficient_su2"],
+        "param_start_mix": 0.30,
+        "param_blend_step": 0.10,
+        "param_max_mix": 0.60,
+        "max_steps": 100_000,  # parametric blend
+        "ent_coef_start": 0.05,
+        "ent_coef_end": 0.02,
+        "step_penalty": 0.003,
+        "promotion": {
+            "eval_mean_reward_min": 0.10,  # same key as stage 1
+            "reward_delta_max": 0.02,  # |reward[t] - reward[t-1]| < 0.02 (stability, not clip_range)
+            "consecutive_evals": 2,
+        },
+    },
+    3: {
+        "families": _ALL_FAMILIES,
+        "family_weights": {f: 1 / 7 for f in _ALL_FAMILIES},
+        "max_steps": 50_000,  # balanced fine-tune  — total 300K
+        "lr": 1e-4,
+        "ent_coef": 0.01,
+        "clip_range": 0.1,
+        "donothing_early_penalty": 0.05,  # penalise DoNothing before MIN_STEPS_BEFORE_STOP
     },
 }

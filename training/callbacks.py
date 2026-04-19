@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-__all__ = ["PassLogWrapper", "LoggingEvalCallback", "PassLoggerCallback", "CurriculumCallback"]
+__all__ = ["PassLogWrapper", "LoggingEvalCallback", "PassLoggerCallback", "CurriculumCallback", "EarlyStoppingCallback"]
 
 import csv
 from collections import defaultdict, Counter
@@ -301,6 +301,107 @@ class CurriculumCallback(BaseCallback):
             promoted = self.curriculum.check_and_promote(eval_mean_reward, donothing_per_ep)
             if promoted:
                 self._stage_start_steps = self.num_timesteps
+
+        return True
+
+
+# ── Early stopping callback ───────────────────────────────────────────────────
+
+
+class EarlyStoppingCallback(BaseCallback):
+    """Stop training when eval_mean_reward has not improved for ``patience`` evals.
+
+    Fires at every eval checkpoint (must use the same ``eval_freq`` as
+    LoggingEvalCallback).  Prints a warning at ``warn_after`` consecutive
+    evals without improvement, then stops training at ``patience``.
+
+    On curriculum runs: counter is reset on every stage promotion so that
+    temporary reward drops at stage transitions do not trigger early stopping.
+
+    Parameters
+    ----------
+    eval_cb     : LoggingEvalCallback — source of last_mean_reward.
+    eval_freq   : must match EvalCallback.eval_freq.
+    patience    : evals without improvement before stopping (default 5).
+    min_delta   : minimum reward improvement to reset the counter (default 0.005).
+    warn_after  : print warning after this many bad evals.  Defaults to patience // 2.
+    curriculum_cb : optional CurriculumCallback — resets counter on stage promotion.
+    verbose     : 0 = silent, 1 = print warnings and stop message.
+    """
+
+    def __init__(
+        self,
+        eval_cb,                          # LoggingEvalCallback
+        eval_freq: int,
+        patience: int = 5,
+        min_delta: float = 0.005,
+        warn_after: int | None = None,
+        curriculum_cb=None,               # CurriculumCallback — optional
+        verbose: int = 1,
+    ) -> None:
+        super().__init__(verbose=verbose)
+        self.eval_cb = eval_cb
+        self.eval_freq = eval_freq
+        self.patience = patience
+        self.min_delta = min_delta
+        self.warn_after = warn_after if warn_after is not None else max(1, patience // 2)
+        self.curriculum_cb = curriculum_cb
+
+        self._best_reward: float = float("-inf")
+        self._no_improve_count: int = 0
+        self._last_curriculum_stage: int = 1
+
+    def reset_counter(self) -> None:
+        """Manually reset the no-improvement counter (called on stage promotion)."""
+        self._no_improve_count = 0
+        self._best_reward = float("-inf")  # reset best so new stage calibrates fresh
+
+    def _on_step(self) -> bool:
+        if self.eval_freq <= 0 or self.n_calls % self.eval_freq != 0:
+            return True
+
+        reward = getattr(self.eval_cb, "last_mean_reward", None)
+        if reward is None:
+            return True  # eval hasn't fired yet
+
+        # Reset counter if curriculum just promoted to a new stage
+        if self.curriculum_cb is not None:
+            current_stage = getattr(self.curriculum_cb.curriculum, "stage", 1)
+            if current_stage != self._last_curriculum_stage:
+                self._last_curriculum_stage = current_stage
+                self.reset_counter()
+                if self.verbose >= 1:
+                    print(
+                        f"[EarlyStopping] Stage promoted to {current_stage} — "
+                        f"resetting no-improvement counter"
+                    )
+                return True
+
+        if reward > self._best_reward + self.min_delta:
+            self._best_reward = reward
+            self._no_improve_count = 0
+        else:
+            self._no_improve_count += 1
+
+            if self.verbose >= 1 and self._no_improve_count == self.warn_after:
+                print(
+                    f"\n[EarlyStopping] WARNING: no improvement for "
+                    f"{self._no_improve_count}/{self.patience} evals "
+                    f"(best={self._best_reward:.4f}, current={reward:.4f}, "
+                    f"min_delta={self.min_delta}). "
+                    f"Will stop in {self.patience - self._no_improve_count} more evals "
+                    f"without improvement.\n"
+                )
+
+            if self._no_improve_count >= self.patience:
+                if self.verbose >= 1:
+                    print(
+                        f"\n[EarlyStopping] Stopping training at step "
+                        f"{self.num_timesteps:,} — no improvement for "
+                        f"{self.patience} consecutive evals. "
+                        f"Best reward: {self._best_reward:.4f}\n"
+                    )
+                return False  # signals SB3 to end .learn()
 
         return True
 

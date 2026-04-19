@@ -1,5 +1,5 @@
 """PassManagerStagePlugin integration."""
 
-from quetsal.src.plugin.quetsal_plugin import QuetsalPlugin
+from quetsal.src.plugin.quetsal_plugin import QuetsalOptimizationPass, QuetsalPlugin
 
-__all__ = ["QuetsalPlugin"]
+__all__ = ["QuetsalOptimizationPass", "QuetsalPlugin"]

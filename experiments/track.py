@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -34,7 +35,7 @@ _COLUMNS = [
     "MAX_STEPS_PER_EPISODE", "MIN_STEPS_BEFORE_STOP",
     "MAX_NODES", "MAX_EDGES",
     # Training scale
-    "n_steps", "n_epochs", "total_steps", "checkpoint_freq", "count_per_family",
+    "n_steps", "batch_size", "n_epochs", "total_steps", "checkpoint_freq", "count_per_family",
     # PPO hyperparameters
     "lr", "gamma", "clip_range", "ent_coef", "gae_lambda",
     "vf_coef", "max_grad_norm",
@@ -90,6 +91,7 @@ def _collect_levers(mode: int) -> dict:
         "MAX_NODES":             C.MAX_NODES,
         "MAX_EDGES":             C.MAX_EDGES,
         "n_steps":               mode_args["n_steps"],
+        "batch_size":            mode_args["n_steps"],  # default: batch_size == n_steps
         "n_epochs":              mode_args["n_epochs"],
         "total_steps":           mode_args["total_steps"],
         "checkpoint_freq":       mode_args["checkpoint_freq"],
@@ -105,6 +107,8 @@ def _collect_levers(mode: int) -> dict:
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         ta = mod._parse_args()
+        # batch_size: use explicit CLI value if set, else fall back to n_steps
+        _batch_size = ta.batch_size if ta.batch_size is not None else ta.n_steps
         row.update({
             "lr":            ta.lr,
             "gamma":         ta.gamma,
@@ -116,6 +120,7 @@ def _collect_levers(mode: int) -> dict:
             "hidden_dim":    ta.hidden_dim,
             "num_layers":    ta.num_layers,
             "latent_dim":    ta.latent_dim,
+            "batch_size":    _batch_size,
         })
     except Exception:
         pass
@@ -144,7 +149,20 @@ def _parse_log(log_path: Path) -> dict:
         matches = re.findall(pattern, text)
         return matches[-1].strip() if matches else ""
 
-    return {
+    # Parse the hparams JSON line emitted by train.py at startup.
+    # These are the actual resolved values (CLI overrides applied), not defaults.
+    hparams: dict = {}
+    _hp_match = re.search(r"\[quetsal\] hparams: (\{.*\})", text)
+    if _hp_match:
+        try:
+            hparams = json.loads(_hp_match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    result: dict = {}
+    result.update(hparams)  # seed with actual hparams; metrics below will add to this
+
+    return result | {
         # rollout block
         "rollout_ep_len_mean":  _last(r"\|\s+ep_len_mean\s+\|\s+([\d.]+)"),
         "rollout_ep_rew_mean":  _last(r"\|\s+ep_rew_mean\s+\|\s+([\d.eE+\-]+)"),

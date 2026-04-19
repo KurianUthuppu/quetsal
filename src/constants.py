@@ -51,15 +51,28 @@ HERON_R2_BASIS: list[str] = ["cz", "id", "rx", "rz", "rzz", "sx", "x"]
 #   OptimizeCliffordT              — Clifford+T path only; Heron r2 is not Clifford+T
 # ---------------------------------------------------------------------------
 ACTION_LABELS: list[str] = [
-    "Optimize1qGatesDecomposition",  # 0  L1,L2,L3 — 1q gate chain decomposition
-    "InverseCancellation",  # 1  L1       — back-to-back inverse cancellation
-    "CommutativeCancellation",  # 2  L2,L3    — commutation-based cancellation
-    "ConsolidateAndSynthesize",  # 3  macro    — ConsolidateBlocks → UnitarySynthesis
+    "Optimize1qGatesDecomposition",    # 0  L1,L2,L3 — 1q gate chain decomposition
+    "CommutativeInverseCancellation",  # 1  L2,L3    — inverse + commutation-based
+    #              cancellation in one pass; supersedes the separate
+    #              InverseCancellation (L1) + CommutativeCancellation (L2,L3)
+    #              and removes action-space redundancy.
+    "ConsolidateAndSynthesize",        # 2  macro    — ConsolidateBlocks → UnitarySynthesis
     #              Qiskit never uses CB without US;
     #              combining removes the 2-step credit
     #              assignment problem entirely.
-    # "RemoveIdentityEquivalent",  # 4  L2,L3    — approx-aware identity removal (disabled)
-    "DoNothing",  # 4  terminate episode
+    # "RemoveIdentityEquivalent",      # disabled — approx-aware identity removal
+    "OptimizeCliffords",               # 3  combines consecutive Clifford gates into a
+    #              single optimal Clifford via synthesis; directly reduces 2q gate
+    #              count on Clifford-heavy families (qv, clifford_su4, clifford_su4_su8)
+    #              that peephole passes leave behind.
+    "Split2QUnitaries",                # 4  splits near-separable 2q unitaries into two
+    #              1q gates (KAK coeff ≈ 0) after ConsolidateBlocks; removes a 2q gate
+    #              entirely when the consolidated block is near-identity.
+    "ZXFullReduce",                    # 5  pyzx.simplify.full_reduce() via QASM round-trip;
+    #              ZX-calculus spider fusion + phase gadget reduction + Clifford simp.
+    #              Equivalent to TKET's ZXGraphlikeOptimisation + CliffordSimp combined.
+    #              Highest 2q-reduction ceiling; most effective on Clifford-heavy circuits.
+    "DoNothing",                       # 6  terminate episode
 ]
 NUM_ACTIONS: int = len(ACTION_LABELS)
 
@@ -167,7 +180,7 @@ TRAINING_MODE_ARGS: dict[int, dict] = {
         },
     },
     1: {  # FULL — proper training
-        "count_per_family": 100,
+        "count_per_family": 500,
         "total_steps": 300_000,
         "n_steps": 1024,
         "n_epochs": 5,

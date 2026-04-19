@@ -34,7 +34,7 @@ Issues = "https://github.com/kurianuthupku/quetsal/issues"
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "ipykernel"]
 
-[project.entry-points."qiskit.transpiler.stage"]
+[project.entry-points."qiskit.transpiler.optimization"]
 quetsal = "quetsal.src.plugin.quetsal_plugin:QuetsalPlugin"
 
 [tool.setuptools.packages.find]

@@ -50,6 +50,7 @@ DEFAULT_LATENT_DIM = 64
 def make_ppo_agent(
     env: gym.Env,
     n_steps: int = DEFAULT_N_STEPS,
+    batch_size: int | None = None,
     n_epochs: int = DEFAULT_N_EPOCHS,
     gamma: float = DEFAULT_GAMMA,
     learning_rate: float = DEFAULT_LR,
@@ -93,11 +94,12 @@ def make_ppo_agent(
     -------
     SB3 PPO model ready for .learn() calls.
     """
+    _batch_size = batch_size if batch_size is not None else n_steps
     return PPO(
         policy=QuetsalGNNPolicy,
         env=env,
         n_steps=n_steps,
-        batch_size=n_steps,  # single minibatch = full rollout (see gnn_policy.py)
+        batch_size=_batch_size,  # default: single minibatch = full rollout (see gnn_policy.py)
         n_epochs=n_epochs,
         gamma=gamma,
         learning_rate=learning_rate,

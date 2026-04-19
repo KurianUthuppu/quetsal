@@ -34,6 +34,7 @@ from quetsal.src.constants import (
 )
 from quetsal.src.environment.circuits import generate_weighted_circuits
 from quetsal.src.environment.pass_env import PassManagerEnv
+from quetsal.training.circuit_cache import sample_weighted_pool
 
 if TYPE_CHECKING:
     from stable_baselines3 import PPO
@@ -67,6 +68,7 @@ class CurriculumController:
         verbose: int = 1,
         smoke: bool = False,
         max_stage: int = 3,
+        master_pool: dict | None = None,
     ) -> None:
         self.model = model
         self.train_env = train_env
@@ -77,6 +79,7 @@ class CurriculumController:
         self.ckpt_dir = ckpt_dir
         self.verbose = verbose
         self.max_stage = max_stage
+        self.master_pool = master_pool  # dict[family->circuits] or None
 
         self.stage = 1
         self._consecutive_passing = 0
@@ -232,7 +235,10 @@ class CurriculumController:
             )
 
     def _promote_to_stage3(self) -> None:
-        """Save stage 2 checkpoint, rebuild circuits, update hyperparams."""
+        """Save stage 2 checkpoint, rebuild circuits, update hyperparams.
+
+        Samples from master_pool when available; otherwise regenerates.
+        """
         self._save_stage_checkpoint(from_stage=2)
         self.stage = 3
         self._consecutive_passing = 0
@@ -240,26 +246,42 @@ class CurriculumController:
         # Rebuild circuit pool — all 7 families, equal weight
         cfg = CURRICULUM_STAGES[3]
         total = self.count_per_family * 7
-        circuits = generate_weighted_circuits(
-            families=cfg["families"],
-            family_weights=cfg["family_weights"],
-            total_count=total,
-            n_qubits_range=self.n_qubits_range,
-            seed=self.circuit_seed + 300,
-            basis_gates=HERON_R2_BASIS,
-        )
-        self.train_env.circuits = circuits
-
-        # Eval circuits
         eval_total = max(14, int(total * 0.20))
-        eval_circuits = generate_weighted_circuits(
-            families=cfg["families"],
-            family_weights=cfg["family_weights"],
-            total_count=eval_total,
-            n_qubits_range=self.n_qubits_range,
-            seed=self.circuit_seed + 999 + 300,
-            basis_gates=HERON_R2_BASIS,
-        )
+
+        if self.master_pool is not None:
+            from quetsal.training.circuit_cache import sample_pool as _sp
+            _ALL_FAMILIES = cfg["families"]
+            circuits = _sp(
+                self.master_pool,
+                families=_ALL_FAMILIES,
+                count_per_family=self.count_per_family,
+                rng_seed=self.circuit_seed + 300,
+            )
+            eval_circuits = _sp(
+                self.master_pool,
+                families=_ALL_FAMILIES,
+                count_per_family=max(2, int(self.count_per_family * 0.20)),
+                rng_seed=self.circuit_seed + 999 + 300,
+            )
+        else:
+            circuits = generate_weighted_circuits(
+                families=cfg["families"],
+                family_weights=cfg["family_weights"],
+                total_count=total,
+                n_qubits_range=self.n_qubits_range,
+                seed=self.circuit_seed + 300,
+                basis_gates=HERON_R2_BASIS,
+            )
+            eval_circuits = generate_weighted_circuits(
+                families=cfg["families"],
+                family_weights=cfg["family_weights"],
+                total_count=eval_total,
+                n_qubits_range=self.n_qubits_range,
+                seed=self.circuit_seed + 999 + 300,
+                basis_gates=HERON_R2_BASIS,
+            )
+
+        self.train_env.circuits = circuits
         self.eval_env_inner.circuits = eval_circuits
 
         # Apply donothing_early_penalty to train and eval envs
@@ -288,7 +310,10 @@ class CurriculumController:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _rebuild_stage2_circuits(self) -> None:
-        """Regenerate stage 2 circuit pool with the current param_mix."""
+        """Rebuild stage 2 circuit pool with the current param_mix.
+
+        Samples from master_pool when available; otherwise regenerates.
+        """
         cfg = CURRICULUM_STAGES[2]
         total = self.count_per_family * len(cfg["families"])
         param_count = int(total * self._stage2_param_mix)
@@ -304,25 +329,42 @@ class CurriculumController:
             weights[f] = (param_count / n_p) / total
 
         seed_offset = 100 + round(self._stage2_param_mix * 100)
-        circuits = generate_weighted_circuits(
-            families=cfg["families"],
-            family_weights=weights,
-            total_count=total,
-            n_qubits_range=self.n_qubits_range,
-            seed=self.circuit_seed + seed_offset,
-            basis_gates=HERON_R2_BASIS,
-        )
-        self.train_env.circuits = circuits
-
         eval_total = max(len(cfg["families"]) * 2, int(total * 0.20))
-        eval_circuits = generate_weighted_circuits(
-            families=cfg["families"],
-            family_weights=weights,
-            total_count=eval_total,
-            n_qubits_range=self.n_qubits_range,
-            seed=self.circuit_seed + 999 + seed_offset,
-            basis_gates=HERON_R2_BASIS,
-        )
+
+        if self.master_pool is not None:
+            circuits = sample_weighted_pool(
+                self.master_pool,
+                families=cfg["families"],
+                family_weights=weights,
+                total_count=total,
+                rng_seed=self.circuit_seed + seed_offset,
+            )
+            eval_circuits = sample_weighted_pool(
+                self.master_pool,
+                families=cfg["families"],
+                family_weights=weights,
+                total_count=eval_total,
+                rng_seed=self.circuit_seed + 999 + seed_offset,
+            )
+        else:
+            circuits = generate_weighted_circuits(
+                families=cfg["families"],
+                family_weights=weights,
+                total_count=total,
+                n_qubits_range=self.n_qubits_range,
+                seed=self.circuit_seed + seed_offset,
+                basis_gates=HERON_R2_BASIS,
+            )
+            eval_circuits = generate_weighted_circuits(
+                families=cfg["families"],
+                family_weights=weights,
+                total_count=eval_total,
+                n_qubits_range=self.n_qubits_range,
+                seed=self.circuit_seed + 999 + seed_offset,
+                basis_gates=HERON_R2_BASIS,
+            )
+
+        self.train_env.circuits = circuits
         self.eval_env_inner.circuits = eval_circuits
 
     def _save_stage_checkpoint(self, from_stage: int) -> None:

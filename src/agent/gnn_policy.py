@@ -4,7 +4,7 @@
 #
 # Architecture:
 #   obs dict {x, edge_index, edge_attr}
-#     → _obs_to_pyg_batch()           reconstruct PyG Batch from SB3 tensors
+#     → _obs_to_pyg_batch()            reconstruct PyG Batch from SB3 tensors
 #     → GINEConv × num_layers          message passing (uses both node + edge feats)
 #     → global_mean_pool               variable graph → fixed-size latent vector
 #     → Linear(hidden_dim, latent_dim) projection
@@ -18,12 +18,10 @@
 #              (qubit role one-hots) carry meaningful structural information.
 #
 # SB3 batching note:
-#   SB3's RolloutBuffer stores observations as stacked numpy arrays.  For
-#   graphs with variable node/edge counts this stacking fails.  Current
-#   workaround: set batch_size == n_steps in PPO so there is exactly one
-#   minibatch per update — the full rollout is processed together via PyG
-#   Batch, avoiding any cross-graph stacking.  A custom RolloutBuffer that
-#   stores Data objects natively would remove this constraint.
+#   SB3's RolloutBuffer stores observations as padded fixed-size numpy arrays.
+#   _obs_to_pyg_batch handles both single-step (2-D) and minibatch (3-D) shapes,
+#   so batch_size < n_steps is supported.  Default: n_steps=128, batch_size=64
+#   (2 minibatches per update), matching TRAINING_MODE_ARGS mode 1.
 # =============================================================================
 
 from __future__ import annotations
@@ -149,15 +147,19 @@ def _obs_to_pyg_batch(observations: dict[str, torch.Tensor]) -> Batch:
     -------
     PyG Batch object with .x, .edge_index, .edge_attr, .batch attributes.
     """
-    x_raw         = observations["x"]
+    x_raw = observations["x"]
     edge_index_raw = observations["edge_index"]
-    edge_attr_raw  = observations["edge_attr"]
-    node_mask_raw  = observations["node_mask"]
-    edge_mask_raw  = observations["edge_mask"]
+    edge_attr_raw = observations["edge_attr"]
+    node_mask_raw = observations["node_mask"]
+    edge_mask_raw = observations["edge_mask"]
 
     # Ensure tensors
     def _t(arr, dtype):
-        return torch.as_tensor(arr, dtype=dtype) if not isinstance(arr, torch.Tensor) else arr.to(dtype)
+        return (
+            torch.as_tensor(arr, dtype=dtype)
+            if not isinstance(arr, torch.Tensor)
+            else arr.to(dtype)
+        )
 
     def _make_data(x_2d, ei_2d, ea_2d, nm, em):
         """Build a single PyG Data, inserting a dummy node if the graph is empty.
@@ -172,15 +174,19 @@ def _obs_to_pyg_batch(observations: dict[str, torch.Tensor]) -> Batch:
         ei_real = _t(ei_2d, torch.long)[:, em_bool]
         ea_real = _t(ea_2d, torch.float)[em_bool]
         if x_real.shape[0] == 0:
-            x_real  = torch.zeros(1, x_real.shape[1] if x_real.dim() > 1 else NODE_DIM)
+            x_real = torch.zeros(1, x_real.shape[1] if x_real.dim() > 1 else NODE_DIM)
             ei_real = torch.zeros(2, 0, dtype=torch.long)
-            ea_real = torch.zeros(0, ea_real.shape[1] if ea_real.dim() > 1 else EDGE_DIM)
+            ea_real = torch.zeros(
+                0, ea_real.shape[1] if ea_real.dim() > 1 else EDGE_DIM
+            )
         return Data(x=x_real, edge_index=ei_real, edge_attr=ea_real)
 
     # Single observation: x is 2-D [MAX_NODES, NODE_DIM]
     if x_raw.dim() == 2 if isinstance(x_raw, torch.Tensor) else x_raw.ndim == 2:
         nm = _t(node_mask_raw, torch.bool).squeeze()
-        return Batch.from_data_list([_make_data(x_raw, edge_index_raw, edge_attr_raw, nm, edge_mask_raw)])
+        return Batch.from_data_list(
+            [_make_data(x_raw, edge_index_raw, edge_attr_raw, nm, edge_mask_raw)]
+        )
 
     # Minibatch: x is 3-D [B, MAX_NODES, NODE_DIM]
     b = x_raw.shape[0]
@@ -192,16 +198,20 @@ def _obs_to_pyg_batch(observations: dict[str, torch.Tensor]) -> Batch:
         ei_raw = _t(edge_index_raw[i], torch.long)[:, em]
         ea_real = _t(edge_attr_raw[i], torch.float)[em]
         if x_real.shape[0] == 0:
-            data_list.append(Data(
-                x          = torch.zeros(1, NODE_DIM),
-                edge_index = torch.zeros(2, 0, dtype=torch.long),
-                edge_attr  = torch.zeros(0, EDGE_DIM),
-            ))
+            data_list.append(
+                Data(
+                    x=torch.zeros(1, NODE_DIM),
+                    edge_index=torch.zeros(2, 0, dtype=torch.long),
+                    edge_attr=torch.zeros(0, EDGE_DIM),
+                )
+            )
         else:
             real_indices = nm.nonzero(as_tuple=True)[0]
             remap = torch.zeros(nm.shape[0], dtype=torch.long)
             remap[real_indices] = torch.arange(real_indices.shape[0])
-            data_list.append(Data(x=x_real, edge_index=remap[ei_raw], edge_attr=ea_real))
+            data_list.append(
+                Data(x=x_real, edge_index=remap[ei_raw], edge_attr=ea_real)
+            )
     return Batch.from_data_list(data_list)
 
 
@@ -221,8 +231,8 @@ class QuetsalGNNPolicy(ActorCriticPolicy):
             num_layers=3,
             latent_dim=64,
         ),
-        n_steps=1024,
-        batch_size=1024,  # == n_steps: one minibatch per update (see SB3 batching note)
+        n_steps=128,
+        batch_size=64,
         ...
     )
 
@@ -249,7 +259,7 @@ class QuetsalGNNPolicy(ActorCriticPolicy):
             num_layers=num_layers,
             latent_dim=latent_dim,
         )
-        kwargs.setdefault("net_arch", [])             # no extra MLP trunk
+        kwargs.setdefault("net_arch", [])  # no extra MLP trunk
         kwargs.setdefault("share_features_extractor", True)  # one shared GNN trunk
         super().__init__(observation_space, action_space, lr_schedule, **kwargs)
         # SB3 calls _build() inside super().__init__(), which constructs

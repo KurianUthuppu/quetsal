@@ -3,37 +3,36 @@
 # Qiskit 2.3  |  DAGCircuit → PyG Data encoder
 #
 # Target HW : ibm_kingston, ibm_marrakesh, ibm_fez, ibm_torino  (Heron r2)
-# Paper ref : "RL for Adaptive Composition of Quantum Circuits" (Quantinuum)
 #
 # ┌─────────────────────────────────────────────────────────────────────┐
 # │  NODE FEATURES  (dim = 10)                                          │
 # │                                                                     │
 # │  idx  feature           enc         rationale                       │
 # │  0–5  gate_type         one-hot[6]  6 optimisable Heron r2 gates;   │
-# │                                     no false ordinal relationship    │
-# │  6    is_clifford        0 / 1      cz,sx,x → 1 ; rz,rx,rzz → 0    │
-# │                                     not derivable from one-hot       │
-# │  7    param_0  (θ/2π)   float 0–1  IBM radians ÷ 2π; 0 if no param │
-# │  8    topo_pos (i/N-1)  float 0–1  unique per node; depth collapses  │
+# │                                     no false ordinal relationship   │
+# │  6    is_clifford        0 / 1      cz,sx,x → 1 ; rz,rx,rzz → 0     │
+# │                                     not derivable from one-hot      │
+# │  7    param_0  (θ/2π)   float 0–1  IBM radians ÷ 2π; 0 if no param  │
+# │  8    topo_pos (i/N-1)  float 0–1  unique per node; depth collapses │
 # │  9    last_pass (÷K+1)  float 0–1  paper-aligned; set by Gym step() │
 # └─────────────────────────────────────────────────────────────────────┘
 #
 # ┌─────────────────────────────────────────────────────────────────────┐
-# │  EDGE FEATURES  (dim = 6 = src_role[3] ++ dst_role[3])             │
+# │  EDGE FEATURES  (dim = 6 = src_role[3] ++ dst_role[3])              │
 # │  Qubit role one-hot  (paper Fig 2b):                                │
 # │   0  target of 1Q gate                                              │
-# │   1  1st qubit of 2Q gate  (e.g. CZ control)                       │
-# │   2  2nd qubit of 2Q gate  (e.g. CZ target)                        │
+# │   1  1st qubit of 2Q gate  (e.g. CZ control)                        │
+# │   2  2nd qubit of 2Q gate  (e.g. CZ target)                         │
 # └─────────────────────────────────────────────────────────────────────┘
 #
 # ┌─────────────────────────────────────────────────────────────────────┐
 # │  GATE VOCABULARY  (one-hot indices 0–5)                             │
 # │   0  cz   2Q entangler        Clifford                              │
-# │   1  rz   1Q Z-rotation       NOT Clifford  (virtual, 0 duration)  │
-# │   2  rx   1Q X-rotation       NOT Clifford                         │
-# │   3  sx   1Q √X               Clifford                             │
-# │   4  x    1Q Pauli X          Clifford                             │
-# │   5  rzz  2Q ZZ rotation      NOT Clifford  (Heron r2 native)      │
+# │   1  rz   1Q Z-rotation       NOT Clifford  (virtual, 0 duration)   │
+# │   2  rx   1Q X-rotation       NOT Clifford                          │
+# │   3  sx   1Q √X               Clifford                              │
+# │   4  x    1Q Pauli X          Clifford                              │
+# │   5  rzz  2Q ZZ rotation      NOT Clifford  (Heron r2 native)       │
 # │                                                                     │
 # │  Excluded from graph (no optimisation pass touches these):          │
 # │   measure, barrier, id, delay, reset                                │
@@ -67,6 +66,7 @@ from quetsal.src.constants import (
 
 # ── Private helpers ───────────────────────────────────────────────────────────
 
+
 def _gate_one_hot(name: str) -> list[float]:
     """
     Return a 6-element one-hot vector for gate name.
@@ -83,7 +83,7 @@ def _gate_one_hot(name: str) -> list[float]:
 def _norm_param(p) -> float:
     """
     Normalise a rotation parameter to [0, 1] via (θ mod 2π) / 2π.
-    IBM Qiskit gates use radians; Quantinuum paper used θ/π — we use θ/2π
+    IBM Qiskit gates use radians;
     because IBM's natural range is [0, 2π], making θ/2π map cleanly to [0, 1].
     Returns 0.0 for symbolic/unbound ParameterExpression objects.
     """
@@ -122,16 +122,10 @@ def _node_features(
     feats: list[float] = _gate_one_hot(name)
 
     # [6]  is_clifford
-    #      Explicit bit needed: Clifford membership is a semantic property.
-    #      The GNN cannot infer it from the one-hot index alone without
-    #      learning that mapping from data — making it explicit saves capacity.
     feats.append(1.0 if name in CLIFFORD_GATES else 0.0)
 
     # [7]  param_0 normalised to [0, 1]
     #      0.0 for non-parametric gates (cz, sx, x).
-    #      Note: rz(0.0) after pass-induced cancellation also yields 0.0 here,
-    #      but its one-hot col 1 stays hot — the GNN can still distinguish it
-    #      from a non-parametric gate.
     params = node.op.params
     feats.append(_norm_param(params[0]) if len(params) > 0 else 0.0)
 
@@ -153,7 +147,7 @@ def _node_features(
     else:
         feats.append(0.0)
 
-    return feats   # length = NODE_DIM = 10
+    return feats  # length = NODE_DIM = 10
 
 
 def _qubit_role(node: DAGOpNode, qubit_pos: int) -> list[int]:
@@ -182,6 +176,7 @@ def _qubit_role(node: DAGOpNode, qubit_pos: int) -> list[int]:
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def dag_to_pyg(
     dag,
@@ -222,15 +217,15 @@ def dag_to_pyg(
 
     if total_ops == 0:
         return Data(
-            x          = torch.zeros((0, NODE_DIM), dtype=torch.float),
-            edge_index = torch.zeros((2, 0),        dtype=torch.long),
-            edge_attr  = torch.zeros((0, EDGE_DIM), dtype=torch.float),
-            num_qubits = dag.num_qubits(),
-            num_ops    = 0,
+            x=torch.zeros((0, NODE_DIM), dtype=torch.float),
+            edge_index=torch.zeros((2, 0), dtype=torch.long),
+            edge_attr=torch.zeros((0, EDGE_DIM), dtype=torch.float),
+            num_qubits=dag.num_qubits(),
+            num_ops=0,
         )
 
     node_to_idx: dict[DAGOpNode, int] = {n: i for i, n in enumerate(op_nodes)}
-    included: set[DAGOpNode]          = set(op_nodes)
+    included: set[DAGOpNode] = set(op_nodes)
 
     # ── Node feature matrix ───────────────────────────────────────────────────
     x = torch.tensor(
@@ -245,9 +240,9 @@ def dag_to_pyg(
     # dag.edges() yields (src_node, dst_node, wire) triples.
     # wire is a Qubit object in Qiskit 2.x.
     # Only add an edge when both endpoints are included op nodes.
-    src_list:       list[int]        = []
-    dst_list:       list[int]        = []
-    edge_attr_list: list[list[int]]  = []
+    src_list: list[int] = []
+    dst_list: list[int] = []
+    edge_attr_list: list[list[int]] = []
 
     for src_node, dst_node, wire in dag.edges():
         if src_node not in included or dst_node not in included:
@@ -264,27 +259,24 @@ def dag_to_pyg(
         dst_q_pos = dst_qargs.index(wire) if wire in dst_qargs else 0
 
         # Edge feature = concat(src_role[3], dst_role[3]) → dim 6
-        edge_feat = (
-            _qubit_role(src_node, src_q_pos)
-            + _qubit_role(dst_node, dst_q_pos)
-        )
+        edge_feat = _qubit_role(src_node, src_q_pos) + _qubit_role(dst_node, dst_q_pos)
         src_list.append(src_idx)
         dst_list.append(dst_idx)
         edge_attr_list.append(edge_feat)
 
     if src_list:
         edge_index = torch.tensor([src_list, dst_list], dtype=torch.long)
-        edge_attr  = torch.tensor(edge_attr_list,       dtype=torch.float)
+        edge_attr = torch.tensor(edge_attr_list, dtype=torch.float)
     else:
-        edge_index = torch.zeros((2, 0),        dtype=torch.long)
-        edge_attr  = torch.zeros((0, EDGE_DIM), dtype=torch.float)
+        edge_index = torch.zeros((2, 0), dtype=torch.long)
+        edge_attr = torch.zeros((0, EDGE_DIM), dtype=torch.float)
 
     return Data(
-        x          = x,
-        edge_index = edge_index,
-        edge_attr  = edge_attr,
-        num_qubits = dag.num_qubits(),
-        num_ops    = total_ops,
+        x=x,
+        edge_index=edge_index,
+        edge_attr=edge_attr,
+        num_qubits=dag.num_qubits(),
+        num_ops=total_ops,
     )
 
 
@@ -306,13 +298,12 @@ def verify_graph(dag, data: Data, verbose: bool = True) -> dict[str, bool]:
     verify_graph(dag, data)
     """
     all_op_nodes = list(dag.topological_op_nodes())
-    op_nodes     = [n for n in all_op_nodes if n.op.name not in SKIP_GATES]
-    included     = set(op_nodes)
+    op_nodes = [n for n in all_op_nodes if n.op.name not in SKIP_GATES]
+    included = set(op_nodes)
 
     expected_nodes = len(op_nodes)
     expected_edges = sum(
-        1 for s, d, _ in dag.edges()
-        if s in included and d in included
+        1 for s, d, _ in dag.edges() if s in included and d in included
     )
 
     # one_hot_valid: every included gate must be in vocab → row sum == 1.
@@ -320,35 +311,35 @@ def verify_graph(dag, data: Data, verbose: bool = True) -> dict[str, bool]:
     one_hot_sums = data.x[:, :NUM_GATE_TYPES].sum(dim=1)
 
     checks: dict[str, bool] = {
-        "node_count"   : data.x.shape[0]          == expected_nodes,
-        "edge_count"   : data.edge_index.shape[1] == expected_edges,
-        "node_dim_10"  : data.x.shape[1]          == NODE_DIM,
-        "edge_dim_6"   : (data.edge_attr.shape[1] == EDGE_DIM
-                          if data.edge_attr.shape[0] > 0 else True),
+        "node_count": data.x.shape[0] == expected_nodes,
+        "edge_count": data.edge_index.shape[1] == expected_edges,
+        "node_dim_10": data.x.shape[1] == NODE_DIM,
+        "edge_dim_6": (
+            data.edge_attr.shape[1] == EDGE_DIM if data.edge_attr.shape[0] > 0 else True
+        ),
         "no_self_loops": bool(
             (data.edge_index[0] != data.edge_index[1]).all()
-            if data.edge_index.shape[1] > 0 else True
+            if data.edge_index.shape[1] > 0
+            else True
         ),
         "one_hot_valid": bool((one_hot_sums == 1.0).all()),
-        "param_01"     : bool(
-            data.x[:, 7].min() >= 0.0 and data.x[:, 7].max() <= 1.0
-        ),
-        "topo_01"      : bool(
-            data.x[:, 8].min() >= 0.0 and data.x[:, 8].max() <= 1.0
-        ),
-        "lastpass_01"  : bool(
-            data.x[:, 9].min() >= 0.0 and data.x[:, 9].max() <= 1.0
-        ),
+        "param_01": bool(data.x[:, 7].min() >= 0.0 and data.x[:, 7].max() <= 1.0),
+        "topo_01": bool(data.x[:, 8].min() >= 0.0 and data.x[:, 8].max() <= 1.0),
+        "lastpass_01": bool(data.x[:, 9].min() >= 0.0 and data.x[:, 9].max() <= 1.0),
     }
 
     if verbose:
-        W  = 64
+        W = 64
         ok = lambda k: "✓" if checks[k] else "✗ FAIL"
         print(f"\n{'='*W}")
         print(f"  Quetzal — DAG → PyG  (Heron r2 | node={NODE_DIM} | edge={EDGE_DIM})")
         print(f"{'='*W}")
-        print(f"  DAG included nodes : {expected_nodes:>4}   PyG nodes : {data.x.shape[0]:>4}  {ok('node_count')}")
-        print(f"  DAG included edges : {expected_edges:>4}   PyG edges : {data.edge_index.shape[1]:>4}  {ok('edge_count')}")
+        print(
+            f"  DAG included nodes : {expected_nodes:>4}   PyG nodes : {data.x.shape[0]:>4}  {ok('node_count')}"
+        )
+        print(
+            f"  DAG included edges : {expected_edges:>4}   PyG edges : {data.edge_index.shape[1]:>4}  {ok('edge_count')}"
+        )
         print(f"  Node dim = {NODE_DIM}       : {ok('node_dim_10')}")
         print(f"  Edge dim = {EDGE_DIM}        : {ok('edge_dim_6')}")
         print(f"  No self-loops      : {ok('no_self_loops')}")
@@ -361,7 +352,7 @@ def verify_graph(dag, data: Data, verbose: bool = True) -> dict[str, bool]:
         gate_ids = data.x[:, :NUM_GATE_TYPES].argmax(dim=1)
         print(f"\n  Gate distribution:")
         for gid in sorted(gate_ids.unique().tolist()):
-            cnt  = (gate_ids == gid).sum().item()
+            cnt = (gate_ids == gid).sum().item()
             name = _inv.get(gid, "unknown")
             cliff = " [Clifford]" if name in CLIFFORD_GATES else ""
             print(f"    [{gid}] {name:<6}{cliff:<12}: {cnt:>4}")
@@ -373,15 +364,19 @@ def verify_graph(dag, data: Data, verbose: bool = True) -> dict[str, bool]:
                 print(f"    {name:<12}: {cnt:>4}")
 
         print(f"\n  Sample features  (first 4 included ops):")
-        print(f"  {'i':<3} {'gate':<6} {'one-hot':<10} "
-              f"{'cliff':>6} {'p0':>7} {'topo':>7} {'lpass':>7}")
+        print(
+            f"  {'i':<3} {'gate':<6} {'one-hot':<10} "
+            f"{'cliff':>6} {'p0':>7} {'topo':>7} {'lpass':>7}"
+        )
         print(f"  {'-'*56}")
         for i in range(min(4, data.x.shape[0])):
             row = data.x[i].tolist()
-            nm  = op_nodes[i].op.name
-            oh  = "".join(str(int(v)) for v in row[:6])
-            print(f"  {i:<3} {nm:<6} [{oh}]  "
-                  f"{row[6]:>6.1f} {row[7]:>7.4f} {row[8]:>7.4f} {row[9]:>7.4f}")
+            nm = op_nodes[i].op.name
+            oh = "".join(str(int(v)) for v in row[:6])
+            print(
+                f"  {i:<3} {nm:<6} [{oh}]  "
+                f"{row[6]:>6.1f} {row[7]:>7.4f} {row[8]:>7.4f} {row[9]:>7.4f}"
+            )
 
         all_ok = all(checks.values())
         print(f"\n  {'ALL CHECKS PASSED ✓' if all_ok else 'SOME CHECKS FAILED ✗'}")
@@ -397,9 +392,8 @@ if __name__ == "__main__":
     from qiskit.converters import circuit_to_dag
     from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
-    qc  = QuantumVolume(4, seed=42)
-    pm  = generate_preset_pass_manager(
-              optimization_level=1, basis_gates=HERON_R2_BASIS)
+    qc = QuantumVolume(4, seed=42)
+    pm = generate_preset_pass_manager(optimization_level=1, basis_gates=HERON_R2_BASIS)
     dag = circuit_to_dag(pm.run(qc))
 
     # Initial encode — no pass history
@@ -411,5 +405,7 @@ if __name__ == "__main__":
     print("  [6]    is_clifford   cz/sx/x → 1.0,  rz/rx/rzz → 0.0")
     print("  [7]    param_0       (θ mod 2π) / 2π  ;  0.0 if no param")
     print("  [8]    topo_pos      i / (N-1)  ;  unique per node")
-    print("  [9]    last_pass     (pass_index+1)/(K+1) ;  0.0=untouched, set by Gym step()")
+    print(
+        "  [9]    last_pass     (pass_index+1)/(K+1) ;  0.0=untouched, set by Gym step()"
+    )
     print(f"\nDATA : {data}")

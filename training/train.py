@@ -3,13 +3,13 @@
 # Training entry point for the Quetsal PPO agent.
 #
 # Usage:
-#   python -m quetsal.training.train                         # uses TRAINING_MODE from constants.py
+#   python -m quetsal.training.train                        # uses TRAINING_MODE from constants.py
 #   python -m quetsal.training.train --mode 0               # quick smoke-test (~2-3 min)
 #   python -m quetsal.training.train --mode 1               # full training run
 #   python -m quetsal.training.train --total-steps 200000   # override individual arg
 #
 # Flow:
-#   1. Generate training circuits (all 7 families)
+#   1. Generate training circuits (all 8 families)
 #   2. Instantiate PassManagerEnv
 #   3. Create PPO agent with QuetsalGNNPolicy
 #   4. Run .learn() with checkpoint + logging callbacks
@@ -112,7 +112,7 @@ def _parse_args() -> argparse.Namespace:
         "--count-per-family",
         type=int,
         default=None,
-        help="Training circuits per family (7 families total)",
+        help="Training circuits per family (8 families total)",
     )
     p.add_argument("--min-qubits", type=int, default=3)
     p.add_argument("--max-qubits", type=int, default=10)
@@ -132,8 +132,7 @@ def _parse_args() -> argparse.Namespace:
         "--batch-size",
         type=int,
         default=None,
-        help="PPO minibatch size. Defaults to n_steps (single minibatch). "
-             "Set smaller (e.g. n_steps//2) for multiple minibatches per epoch.",
+        help="PPO minibatch size. Defaults to n_steps (single minibatch).",
     )
     p.add_argument("--n-epochs", type=int, default=None)
     p.add_argument("--lr", type=float, default=3e-4)
@@ -146,7 +145,7 @@ def _parse_args() -> argparse.Namespace:
 
     # GNN
     p.add_argument("--hidden-dim", type=int, default=64)
-    p.add_argument("--num-layers", type=int, default=3)
+    p.add_argument("--num-layers", type=int, default=4)
     p.add_argument("--latent-dim", type=int, default=64)
 
     # I/O
@@ -177,21 +176,21 @@ def _parse_args() -> argparse.Namespace:
         default=3,
         choices=[1, 2, 3],
         help="Highest curriculum stage to enter (default 3 = all stages). "
-             "Use --max-stage 1 to train on non-parametric families only.",
+        "Use --max-stage 1 to train on non-parametric families only.",
     )
     p.add_argument(
         "--early-stopping-patience",
         type=int,
         default=0,
         help="Stop training if eval_mean_reward does not improve for this many "
-             "consecutive eval checkpoints. 0 = disabled (default).",
+        "consecutive eval checkpoints. 0 = disabled (default).",
     )
     p.add_argument(
         "--early-stopping-min-delta",
         type=float,
         default=0.005,
         help="Minimum reward improvement to count as progress for early stopping "
-             "(default 0.005).",
+        "(default 0.005).",
     )
     p.add_argument(
         "--notes",
@@ -204,26 +203,40 @@ def _parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help="Path to the master circuit pool .pkl file. "
-             "If the file exists, circuits are sampled from it (no generation). "
-             "If the file does not exist, the pool is generated once and saved. "
-             "All training runs with the same path reuse the same pool regardless "
-             "of --count-per-family or other training hyperparameters. "
-             "Example: --master-pool-path runs/circuits/master.pkl",
+        "If the file exists, circuits are sampled from it (no generation). "
+        "If the file does not exist, the pool is generated once and saved. "
+        "All training runs with the same path reuse the same pool regardless "
+        "of --count-per-family or other training hyperparameters. "
+        "Example: --master-pool-path runs/circuits/master.pkl",
     )
     p.add_argument(
         "--master-pool-size",
         type=int,
         default=1000,
         help="Circuits per family to generate when building the master pool "
-             "(only used if --master-pool-path is set and the file does not yet "
-             "exist). Default 1000. Some families may produce fewer after filtering.",
+        "(only used if --master-pool-path is set) "
+        "Default 1000. Some families may produce fewer after filtering.",
     )
     p.add_argument(
         "--build-pool-only",
         action="store_true",
         default=False,
         help="Build (or verify) the master pool at --master-pool-path and exit "
-             "without training. Requires --master-pool-path.",
+        "without training. Requires --master-pool-path.",
+    )
+
+    p.add_argument(
+        "--families",
+        type=str,
+        nargs="+",
+        default=None,
+        metavar="FAMILY",
+        help=(
+            "Restrict training to specific circuit families. "
+            "Valid names: qv, qaoa, clifford_su4_su8, clifford_su4, iqp, "
+            "efficient_su2, real_amplitudes, random_clifford. "
+            "Default: all 8 families. Not compatible with --curriculum."
+        ),
     )
 
     args = p.parse_args()
@@ -265,22 +278,22 @@ def main() -> None:
     # Emit all resolved hyperparameters as a single JSON line so that
     # track.py can read actual values instead of reconstructing from defaults.
     _hparams = {
-        "n_steps":        args.n_steps,
-        "batch_size":     args.batch_size if args.batch_size is not None else args.n_steps,
-        "n_epochs":       args.n_epochs,
-        "total_steps":    args.total_steps,
+        "n_steps": args.n_steps,
+        "batch_size": args.batch_size if args.batch_size is not None else args.n_steps,
+        "n_epochs": args.n_epochs,
+        "total_steps": args.total_steps,
         "checkpoint_freq": args.checkpoint_freq,
         "count_per_family": args.count_per_family,
-        "lr":             args.lr,
-        "gamma":          args.gamma,
-        "clip_range":     args.clip_range,
-        "ent_coef":       args.ent_coef,
-        "gae_lambda":     args.gae_lambda,
-        "vf_coef":        args.vf_coef,
-        "max_grad_norm":  args.max_grad_norm,
-        "hidden_dim":     args.hidden_dim,
-        "num_layers":     args.num_layers,
-        "latent_dim":     args.latent_dim,
+        "lr": args.lr,
+        "gamma": args.gamma,
+        "clip_range": args.clip_range,
+        "ent_coef": args.ent_coef,
+        "gae_lambda": args.gae_lambda,
+        "vf_coef": args.vf_coef,
+        "max_grad_norm": args.max_grad_norm,
+        "hidden_dim": args.hidden_dim,
+        "num_layers": args.num_layers,
+        "latent_dim": args.latent_dim,
     }
     print(f"[quetsal] hparams: {json.dumps(_hparams)}")
 
@@ -305,12 +318,20 @@ def main() -> None:
             )
             save_master_pool(_master_pool, _pool_path)
         else:
-            # Pool loaded — extend any family below the target size
+            # Pool loaded — extend if any needed family is absent or below target
+            _needed_fams = (
+                CURRICULUM_STAGES[1]["families"]
+                if args.curriculum
+                else list(_master_pool.keys())
+            )
+            _missing_fams = [f for f in _needed_fams if f not in _master_pool]
             _min_count = min(len(v) for v in _master_pool.values())
-            if _min_count < args.master_pool_size:
+            if _min_count < args.master_pool_size or _missing_fams:
                 print(
                     f"[quetsal] Pool has min {_min_count}/family "
-                    f"(target {args.master_pool_size}). Extending..."
+                    f"(target {args.master_pool_size})"
+                    + (f", missing families: {_missing_fams}" if _missing_fams else "")
+                    + ". Extending..."
                 )
                 _master_pool, _extended = extend_master_pool(
                     pool=_master_pool,
@@ -325,13 +346,16 @@ def main() -> None:
 
         if args.build_pool_only:
             total = sum(len(v) for v in _master_pool.values())
-            print(f"[quetsal] Pool ready ({total:,} circuits). Exiting (--build-pool-only).")
+            print(
+                f"[quetsal] Pool ready ({total:,} circuits). Exiting (--build-pool-only)."
+            )
             tee.close()
             return
 
     # Sample training circuits from master pool (if available) or generate directly
-    _s1 = CURRICULUM_STAGES[1]
-    _s1_total = args.count_per_family * len(_s1["families"])  # used for eval sizing below
+    if args.curriculum:
+        _s1 = CURRICULUM_STAGES[1]
+        _s1_total = args.count_per_family * len(_s1["families"])
 
     if _master_pool is not None:
         if args.curriculum:
@@ -343,7 +367,9 @@ def main() -> None:
                 rng_seed=args.circuit_seed,
             )
         else:
-            _ALL_FAMILIES = list(_master_pool.keys())
+            _ALL_FAMILIES = (
+                args.families if args.families else list(_master_pool.keys())
+            )
             circuits = sample_pool(
                 _master_pool,
                 families=_ALL_FAMILIES,
@@ -359,6 +385,7 @@ def main() -> None:
         t0 = time.time()
         if args.curriculum:
             from quetsal.src.environment.circuits import generate_weighted_circuits
+
             circuits = generate_weighted_circuits(
                 families=_s1["families"],
                 family_weights=_s1["family_weights"],
@@ -373,6 +400,7 @@ def main() -> None:
                 count_per_family=args.count_per_family,
                 seed=args.circuit_seed,
                 basis_gates=HERON_R2_BASIS,
+                families=args.families,
             )
         print(f"[quetsal] {len(circuits)} circuits ready in {time.time() - t0:.1f}s")
 
@@ -389,7 +417,7 @@ def main() -> None:
     model = make_ppo_agent(
         env=env,
         n_steps=args.n_steps,
-        batch_size=args.batch_size,
+        batch_size=args.batch_size if args.batch_size is not None else args.n_steps,
         n_epochs=args.n_epochs,
         gamma=args.gamma,
         learning_rate=args.lr,
@@ -429,11 +457,11 @@ def main() -> None:
 
     # Eval env — uses stage 1 families when curriculum, else full pool
     _EVAL_SEED_OFFSET = 999
-    _eval_count = max(2, int(args.count_per_family * 0.20))
+    _eval_count = max(1, min(50, int(args.count_per_family * 0.10)))
 
     if _master_pool is not None:
         if args.curriculum:
-            _s1_eval_total = max(len(_s1["families"]) * 2, int(_s1_total * 0.20))
+            _s1_eval_total = len(_s1["families"]) * 50
             eval_circuits = sample_weighted_pool(
                 _master_pool,
                 families=_s1["families"],
@@ -442,7 +470,9 @@ def main() -> None:
                 rng_seed=args.circuit_seed + _EVAL_SEED_OFFSET,
             )
         else:
-            _ALL_FAMILIES = list(_master_pool.keys())
+            _ALL_FAMILIES = (
+                args.families if args.families else list(_master_pool.keys())
+            )
             eval_circuits = sample_pool(
                 _master_pool,
                 families=_ALL_FAMILIES,
@@ -452,7 +482,8 @@ def main() -> None:
     else:
         if args.curriculum:
             from quetsal.src.environment.circuits import generate_weighted_circuits
-            _s1_eval_total = max(len(_s1["families"]) * 2, int(_s1_total * 0.20))
+
+            _s1_eval_total = len(_s1["families"]) * 50
             eval_circuits = generate_weighted_circuits(
                 families=_s1["families"],
                 family_weights=_s1["family_weights"],
@@ -467,10 +498,16 @@ def main() -> None:
                 count_per_family=_eval_count,
                 seed=args.circuit_seed + _EVAL_SEED_OFFSET,
                 basis_gates=HERON_R2_BASIS,
+                families=args.families,
             )
-    print(f"[quetsal] Eval pool: {len(eval_circuits)} circuits ({_eval_count}/family requested, {len(eval_circuits)//7} avg after filtering)")
+    _n_active_fam = len(args.families) if args.families else 8
+    print(
+        f"[quetsal] Eval pool: {len(eval_circuits)} circuits ({_eval_count}/family requested, {len(eval_circuits)//_n_active_fam} avg after filtering)"
+    )
 
-    _inner_eval_env = PassManagerEnv(circuits=eval_circuits, max_steps=MAX_STEPS_PER_EPISODE)
+    _inner_eval_env = PassManagerEnv(
+        circuits=eval_circuits, max_steps=MAX_STEPS_PER_EPISODE
+    )
     _pass_log_wrapper = PassLogWrapper(_inner_eval_env)
     eval_env = Monitor(_pass_log_wrapper)
 
@@ -537,8 +574,12 @@ def main() -> None:
             verbose=args.verbose,
         )
         cb_list.append(curriculum_cb)
-        _stage_cap = f" (capped at Stage {args.max_stage})" if args.max_stage < 3 else ""
-        print(f"[quetsal] Curriculum learning enabled — starting at Stage 1{_stage_cap}")
+        _stage_cap = (
+            f" (capped at Stage {args.max_stage})" if args.max_stage < 3 else ""
+        )
+        print(
+            f"[quetsal] Curriculum learning enabled — starting at Stage 1{_stage_cap}"
+        )
 
         # Link curriculum_cb into early stopping so the counter resets on stage promotion
         if early_stopping_cb is not None:

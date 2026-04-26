@@ -6,7 +6,7 @@
 # --------
 # 1. First run (pool file does not exist):
 #      build_master_pool() generates max_per_family circuits for each of the
-#      7 families, runs them through the full transpile+filter pipeline, and
+#      8 families, runs them through the full transpile+filter pipeline, and
 #      saves the result as a dict[family -> list[QuantumCircuit]] to disk.
 #
 # 2. Every subsequent run (pool file exists):
@@ -48,6 +48,7 @@ _ALL_FAMILIES = [
     "iqp",
     "efficient_su2",
     "real_amplitudes",
+    "random_clifford",
 ]
 
 
@@ -61,14 +62,11 @@ def build_master_pool(
     seed: int,
     basis_gates: list[str],
 ) -> dict[str, list]:
-    """Generate and return a master circuit pool for all 7 families.
+    """Generate and return a master circuit pool for all 8 families.
 
     Calls each family's generator with ``count=max_per_family``.  Circuits
     that fail the node-count or 2q-gate filter are silently dropped, so the
     actual count per family may be slightly below max_per_family.
-
-    Prints per-family progress — this is the slow one-time call (≈20-30 min
-    at 1000/family on CPU).
 
     Parameters
     ----------
@@ -89,27 +87,32 @@ def build_master_pool(
         generate_iqp_circuits,
         generate_qaoa_circuits,
         generate_qv_circuits,
+        generate_random_clifford_circuits,
         generate_real_amplitudes_circuits,
     )
 
     _generators = {
-        "qv":                  generate_qv_circuits,
-        "qaoa":                generate_qaoa_circuits,
-        "clifford_su4_su8":    generate_clifford_su4_su8_circuits,
-        "clifford_su4":        generate_clifford_su4_circuits,
-        "iqp":                 generate_iqp_circuits,
-        "efficient_su2":       generate_efficient_su2_circuits,
-        "real_amplitudes":     generate_real_amplitudes_circuits,
+        "qv": generate_qv_circuits,
+        "qaoa": generate_qaoa_circuits,
+        "clifford_su4_su8": generate_clifford_su4_su8_circuits,
+        "clifford_su4": generate_clifford_su4_circuits,
+        "iqp": generate_iqp_circuits,
+        "efficient_su2": generate_efficient_su2_circuits,
+        "real_amplitudes": generate_real_amplitudes_circuits,
+        "random_clifford": generate_random_clifford_circuits,
     }
 
+    n_families = len(_generators)
     pool: dict[str, list] = {}
     t_start = time.time()
-    print(f"[master_pool] Building pool: {max_per_family}/family requested, "
-          f"qubits={min_qubits}-{max_qubits}, seed={seed}")
+    print(
+        f"[master_pool] Building pool: {max_per_family}/family requested, "
+        f"qubits={min_qubits}-{max_qubits}, seed={seed}"
+    )
 
     for i, (family, gen) in enumerate(_generators.items()):
         t0 = time.time()
-        print(f"[master_pool] ({i+1}/7) {family}...", end=" ", flush=True)
+        print(f"[master_pool] ({i+1}/{n_families}) {family}...", end=" ", flush=True)
         circuits = gen(
             n_qubits_range=(min_qubits, max_qubits),
             count=max_per_family,
@@ -163,17 +166,19 @@ def extend_master_pool(
         generate_iqp_circuits,
         generate_qaoa_circuits,
         generate_qv_circuits,
+        generate_random_clifford_circuits,
         generate_real_amplitudes_circuits,
     )
 
     _generators = {
-        "qv":               generate_qv_circuits,
-        "qaoa":             generate_qaoa_circuits,
+        "qv": generate_qv_circuits,
+        "qaoa": generate_qaoa_circuits,
         "clifford_su4_su8": generate_clifford_su4_su8_circuits,
-        "clifford_su4":     generate_clifford_su4_circuits,
-        "iqp":              generate_iqp_circuits,
-        "efficient_su2":    generate_efficient_su2_circuits,
-        "real_amplitudes":  generate_real_amplitudes_circuits,
+        "clifford_su4": generate_clifford_su4_circuits,
+        "iqp": generate_iqp_circuits,
+        "efficient_su2": generate_efficient_su2_circuits,
+        "real_amplitudes": generate_real_amplitudes_circuits,
+        "random_clifford": generate_random_clifford_circuits,
     }
 
     was_extended = False
@@ -189,7 +194,8 @@ def extend_master_pool(
         print(
             f"[master_pool] Extending {family}: {current} -> {target_per_family} "
             f"(need {needed}, seed={ext_seed})...",
-            end=" ", flush=True,
+            end=" ",
+            flush=True,
         )
         t0 = time.time()
         # Generate 3× budget to account for filtering; trim to what's needed
@@ -213,7 +219,9 @@ def extend_master_pool(
 
     if was_extended:
         total = sum(len(v) for v in pool.values())
-        print(f"[master_pool] Extension done: {total:,} circuits total in {time.time()-t_start:.0f}s")
+        print(
+            f"[master_pool] Extension done: {total:,} circuits total in {time.time()-t_start:.0f}s"
+        )
 
     return pool, was_extended
 
@@ -256,7 +264,9 @@ def load_master_pool(path: str | Path) -> dict[str, list] | None:
     total = sum(len(v) for v in pool.values())
     per = {f: len(v) for f, v in pool.items()}
     print(f"[master_pool] Loaded {total:,} circuits <- {path}")
-    print(f"[master_pool]   per family: { {f: per[f] for f in _ALL_FAMILIES if f in per} }")
+    print(
+        f"[master_pool]   per family: { {f: per[f] for f in _ALL_FAMILIES if f in per} }"
+    )
     return pool
 
 

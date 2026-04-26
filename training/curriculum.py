@@ -8,9 +8,9 @@
 # checkpoint.
 #
 # Stages (defined in constants.CURRICULUM_STAGES):
-#   1 — Foundation:        non-parametric families, learn structural optimisation
-#   2 — Parametric blend:  blend in QAOA/IQP/EfficientSU2 gradually
-#   3 — Balanced fine-tune: all 7 families, equal weight, tight clip, low LR
+#   1 — Foundation:        4 non-param families (QV/Clifford-SU4/Clifford-SU4-SU8/RandomClifford)
+#   2 — Parametric blend:  adds IQP (non-param) + QAOA/EfficientSU2 (param, 10%→20% mix)
+#   3 — Balanced fine-tune: all 8 families; non-param 17% each, param 5% each; RealAmplitudes introduced here
 #
 # Used only when train.py is invoked with --curriculum.
 # =============================================================================
@@ -29,8 +29,6 @@ import numpy as np
 from quetsal.src.constants import (
     CURRICULUM_STAGES,
     HERON_R2_BASIS,
-    MAX_STEPS_PER_EPISODE,
-    MIN_STEPS_BEFORE_STOP,
 )
 from quetsal.src.environment.circuits import generate_weighted_circuits
 from quetsal.src.environment.pass_env import PassManagerEnv
@@ -46,9 +44,9 @@ class CurriculumController:
     Parameters
     ----------
     model           : the SB3 PPO model being trained.
-    train_env       : PassManagerEnv whose .circuits list is swapped on promotion.
+    train_env       : PassManagerEnv whose circuits list is swapped on promotion.
     eval_env_inner  : the inner PassManagerEnv inside the eval Monitor/Wrapper stack,
-                      so its .circuits can be updated to match the new stage.
+                      so its circuits can be updated to match the new stage.
     n_qubits_range  : qubit range passed through to circuit generators.
     count_per_family: circuits per family for the training pool.
     circuit_seed    : base seed; eval uses seed + 999 offset.
@@ -91,6 +89,7 @@ class CurriculumController:
         if smoke:
             from quetsal.src.constants import TRAINING_MODE_ARGS
             import copy
+
             smoke_cfg = TRAINING_MODE_ARGS[0].get("curriculum_smoke", {})
             self._stages = copy.deepcopy(CURRICULUM_STAGES)
             for stage_id in (1, 2):
@@ -150,11 +149,15 @@ class CurriculumController:
                         f"{self._stage2_param_mix:.0%}"
                     )
 
-    def update_stage2_entropy(self, steps_in_stage: int, total_stage_steps: int) -> None:
+    def update_stage2_entropy(
+        self, steps_in_stage: int, total_stage_steps: int
+    ) -> None:
         """Linearly decay ent_coef from ent_coef_start → ent_coef_end over stage 2."""
         cfg = CURRICULUM_STAGES[2]
         progress = min(steps_in_stage / max(total_stage_steps, 1), 1.0)
-        new_ent = cfg["ent_coef_start"] + progress * (cfg["ent_coef_end"] - cfg["ent_coef_start"])
+        new_ent = cfg["ent_coef_start"] + progress * (
+            cfg["ent_coef_end"] - cfg["ent_coef_start"]
+        )
         self.model.ent_coef = float(new_ent)
 
     # ── Stage-specific promotion checks ──────────────────────────────────────
@@ -190,7 +193,8 @@ class CurriculumController:
         passed = (
             eval_mean_reward >= cfg["eval_mean_reward_min"]
             and len(self._recent_rewards) == 2
-            and abs(self._recent_rewards[1] - self._recent_rewards[0]) < cfg["reward_delta_max"]
+            and abs(self._recent_rewards[1] - self._recent_rewards[0])
+            < cfg["reward_delta_max"]
         )
         if passed:
             self._consecutive_passing += 1
@@ -243,13 +247,14 @@ class CurriculumController:
         self.stage = 3
         self._consecutive_passing = 0
 
-        # Rebuild circuit pool — all 7 families, equal weight
+        # Rebuild circuit pool — all families in stage 3
         cfg = CURRICULUM_STAGES[3]
-        total = self.count_per_family * 7
+        total = self.count_per_family * len(cfg["families"])
         eval_total = max(14, int(total * 0.20))
 
         if self.master_pool is not None:
             from quetsal.training.circuit_cache import sample_pool as _sp
+
             _ALL_FAMILIES = cfg["families"]
             circuits = _sp(
                 self.master_pool,
@@ -293,8 +298,10 @@ class CurriculumController:
         # SB3 stores clip_range and ent_coef internally as callables λ(progress)→float.
         # Assigning a raw float would crash ppo.train() which calls self.clip_range(progress).
         # get_schedule_fn wraps a float into a constant callable automatically.
-        self.model.ent_coef = float(cfg["ent_coef"])          # float — used directly in loss
-        self.model.clip_range = get_schedule_fn(cfg["clip_range"])  # callable — called with progress
+        self.model.ent_coef = float(cfg["ent_coef"])  # float — used directly in loss
+        self.model.clip_range = get_schedule_fn(
+            cfg["clip_range"]
+        )  # callable — called with progress
         for pg in self.model.policy.optimizer.param_groups:
             pg["lr"] = cfg["lr"]
 

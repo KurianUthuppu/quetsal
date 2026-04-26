@@ -1,23 +1,28 @@
 # =============================================================================
 # quetsal/training/callbacks.py
-# SB3 callbacks and env wrapper for per-family pass logging.
+# SB3 callbacks and gym wrapper for training observability and curriculum control.
 #
-# PassLogWrapper        — gym.Wrapper around eval env; intercepts step() to
-#                         accumulate per-family pass counts directly.
-# LoggingEvalCallback   — EvalCallback subclass; flushes PassLogWrapper after
-#                         each eval round (no unsupported 'callback' kwarg).
-# PassLoggerCallback    — BaseCallback for training rollouts; flushes every
-#                         log_freq env steps.
-#
-# CSV columns per family:
-#   episodes            — completed episodes seen for this family
-#   <pass>_total        — raw cumulative pass count
-#   <pass>_per_ep       — pass count / episodes (avg per circuit replay)
+# PassLogWrapper        — gym.Wrapper; intercepts step() to accumulate per-family
+#                         pass counts and episode counts; flushed by eval/train CBs.
+# LoggingEvalCallback   — EvalCallback subclass; flushes PassLogWrapper after each
+#                         eval round; explicit best-model save.
+# PassLoggerCallback    — BaseCallback; logs per-family pass counts to CSV every
+#                         log_freq training steps.
+# CurriculumCallback    — BaseCallback; fires at each eval checkpoint to drive stage
+#                         promotion, stage 2 blend updates, and entropy decay.
+# EarlyStoppingCallback — BaseCallback; stops training when eval reward stagnates
+#                         for `patience` evals; counter reset on stage promotion.
 # =============================================================================
 
 from __future__ import annotations
 
-__all__ = ["PassLogWrapper", "LoggingEvalCallback", "PassLoggerCallback", "CurriculumCallback", "EarlyStoppingCallback"]
+__all__ = [
+    "PassLogWrapper",
+    "LoggingEvalCallback",
+    "PassLoggerCallback",
+    "CurriculumCallback",
+    "EarlyStoppingCallback",
+]
 
 import csv
 from collections import defaultdict, Counter
@@ -26,18 +31,22 @@ from pathlib import Path
 import gymnasium as gym
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
-from quetsal.src.constants import ACTION_LABELS
+from quetsal.src.constants import ACTION_LABELS, CURRICULUM_STAGES
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 _FAMILIES_ORDER = [
+    # Stage 1 — non-param foundation
     "qv",
-    "qaoa",
-    "clifford_su4_su8",
     "clifford_su4",
+    "clifford_su4_su8",
+    "random_clifford",
+    # Stage 2 — adds IQP (non-param) + parametric blend
     "iqp",
+    "qaoa",
     "efficient_su2",
+    # Stage 3 — adds parametric fine-tune
     "real_amplitudes",
     "unknown",
 ]
@@ -69,9 +78,7 @@ def _print_table(
 
     col_w, fam_w, ep_w = 7, 20, 8
     # Two sub-columns per action: total (int) + per_ep (float)
-    action_header = "".join(
-        f"{a[:6]:>{col_w}} {'avg':>{col_w}}" for a in ACTION_LABELS
-    )
+    action_header = "".join(f"{a[:6]:>{col_w}} {'avg':>{col_w}}" for a in ACTION_LABELS)
     header = f"{'family':<{fam_w}}{'episodes':>{ep_w}}  {action_header}"
     sep = "-" * len(header)
 
@@ -122,7 +129,12 @@ def _write_csv(
 
         for fam in families:
             n = max(episodes.get(fam, 1), 1)
-            row: dict = {"step": step, "split": split, "family": fam, "episodes": episodes.get(fam, 0)}
+            row: dict = {
+                "step": step,
+                "split": split,
+                "family": fam,
+                "episodes": episodes.get(fam, 0),
+            }
             for a in ACTION_LABELS:
                 raw = counts[fam].get(a, 0)
                 row[f"{a}_total"] = raw
@@ -132,7 +144,12 @@ def _write_csv(
         # TOTAL row
         total_n = sum(episodes.get(f, 0) for f in families)
         denom = max(total_n, 1)
-        total_row: dict = {"step": step, "split": split, "family": "TOTAL", "episodes": total_n}
+        total_row: dict = {
+            "step": step,
+            "split": split,
+            "family": "TOTAL",
+            "episodes": total_n,
+        }
         for a in ACTION_LABELS:
             raw = sum(counts[f].get(a, 0) for f in families)
             total_row[f"{a}_total"] = raw
@@ -185,11 +202,29 @@ class LoggingEvalCallback(EvalCallback):
         super().__init__(*args, **kwargs)
         self._pass_log_path = Path(pass_log_path)
         self._pass_log_verbose = pass_log_verbose
+        self._explicit_best_reward: float = float("-inf")
 
     def _on_step(self) -> bool:
         will_eval = self.eval_freq > 0 and self.n_calls % self.eval_freq == 0
         result = super()._on_step()
         if will_eval:
+            # Explicit best-model save: SB3's internal save (os.path.join +
+            # zipfile write) can silently fail to overwrite on Windows when the
+            # existing zip file handle isn't fully released before the next
+            # write.  We track our own best and re-save directly via pathlib to
+            # guarantee the file is always the true best checkpoint.
+            _reward = getattr(self, "last_mean_reward", float("-inf"))
+            _save_dir = getattr(self, "best_model_save_path", None)
+            if _reward > self._explicit_best_reward and _save_dir:
+                self._explicit_best_reward = _reward
+                _dest = Path(_save_dir) / "best_model"
+                self.model.save(str(_dest))
+                if self.verbose >= 1:
+                    print(
+                        f"[quetsal] Best model updated "
+                        f"(eval_reward={_reward:.4f}) -> {_dest}.zip"
+                    )
+
             inner = self.eval_env
             try:
                 env = inner.envs[0]
@@ -197,7 +232,9 @@ class LoggingEvalCallback(EvalCallback):
                 env = inner
             while env is not None:
                 if isinstance(env, PassLogWrapper):
-                    env.flush(self.num_timesteps, self._pass_log_path, self._pass_log_verbose)
+                    env.flush(
+                        self.num_timesteps, self._pass_log_path, self._pass_log_verbose
+                    )
                     break
                 env = getattr(env, "env", None)
         return result
@@ -230,7 +267,13 @@ class PassLoggerCallback(BaseCallback):
         if self.num_timesteps - self._last_flush >= self.log_freq:
             if self.verbose >= 1:
                 _print_table(self._counts, self._episodes, self.num_timesteps, "train")
-            _write_csv(self._counts, self._episodes, self.num_timesteps, "train", self.save_path)
+            _write_csv(
+                self._counts,
+                self._episodes,
+                self.num_timesteps,
+                "train",
+                self.save_path,
+            )
             self._last_flush = self.num_timesteps
 
         return True
@@ -257,8 +300,8 @@ class CurriculumCallback(BaseCallback):
 
     def __init__(
         self,
-        curriculum,  # CurriculumController — avoid circular import with TYPE_CHECKING
-        eval_cb,     # LoggingEvalCallback
+        curriculum,  # CurriculumController
+        eval_cb,  # LoggingEvalCallback
         eval_log_wrapper: "PassLogWrapper",
         eval_freq: int,
         verbose: int = 1,
@@ -298,7 +341,9 @@ class CurriculumCallback(BaseCallback):
                 self.curriculum.update_stage2_entropy(steps_in_stage, max_steps)
 
             # Check promotion
-            promoted = self.curriculum.check_and_promote(eval_mean_reward, donothing_per_ep)
+            promoted = self.curriculum.check_and_promote(
+                eval_mean_reward, donothing_per_ep
+            )
             if promoted:
                 self._stage_start_steps = self.num_timesteps
 
@@ -331,12 +376,12 @@ class EarlyStoppingCallback(BaseCallback):
 
     def __init__(
         self,
-        eval_cb,                          # LoggingEvalCallback
+        eval_cb,  # LoggingEvalCallback
         eval_freq: int,
         patience: int = 5,
         min_delta: float = 0.005,
         warn_after: int | None = None,
-        curriculum_cb=None,               # CurriculumCallback — optional
+        curriculum_cb=None,  # CurriculumCallback — optional
         verbose: int = 1,
     ) -> None:
         super().__init__(verbose=verbose)
@@ -344,7 +389,9 @@ class EarlyStoppingCallback(BaseCallback):
         self.eval_freq = eval_freq
         self.patience = patience
         self.min_delta = min_delta
-        self.warn_after = warn_after if warn_after is not None else max(1, patience // 2)
+        self.warn_after = (
+            warn_after if warn_after is not None else max(1, patience // 2)
+        )
         self.curriculum_cb = curriculum_cb
 
         self._best_reward: float = float("-inf")
@@ -404,7 +451,3 @@ class EarlyStoppingCallback(BaseCallback):
                 return False  # signals SB3 to end .learn()
 
         return True
-
-
-# Avoid circular import — import here so CurriculumCallback can reference the constant
-from quetsal.src.constants import CURRICULUM_STAGES  # noqa: E402

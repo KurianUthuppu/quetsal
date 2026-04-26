@@ -4,7 +4,6 @@
 #
 # Responsibilities:
 #   - Instantiate SB3 PPO with QuetsalGNNPolicy
-#   - Enforce the batch_size == n_steps constraint (single minibatch per update)
 #   - Provide save / load helpers
 #   - Expose a predict() method for eval/benchmarking use
 #
@@ -26,15 +25,14 @@ from quetsal.src.agent.gnn_policy import QuetsalGNNPolicy
 # ── Defaults ──────────────────────────────────────────────────────────────────
 
 # n_steps: number of env steps collected per rollout before each PPO update.
-# batch_size must equal n_steps (workaround for variable-size graph obs — see gnn_policy.py).
-# See gnn_policy.py SB3 batching note for explanation.
-DEFAULT_N_STEPS = 1024
-DEFAULT_N_EPOCHS = 5  # PPO gradient steps per rollout
+DEFAULT_N_STEPS = 128
+DEFAULT_BATCH_SIZE = 64
+DEFAULT_N_EPOCHS = 5  # number of gradient update iterations per rollout
 DEFAULT_GAMMA = 0.99  # discount factor
 DEFAULT_LR = 3e-4  # learning rate
 DEFAULT_CLIP_RANGE = 0.2  # PPO clip epsilon
-DEFAULT_ENT_COEF = 0.03  # entropy bonus (encourages exploration)
-DEFAULT_GAE_LAMBDA = 0.95  # GAE smoothing (0=TD, 1=Monte Carlo)
+DEFAULT_ENT_COEF = 0.05  # entropy bonus (encourages exploration)
+DEFAULT_GAE_LAMBDA = 0.95  # GAE smoothing
 DEFAULT_VF_COEF = 0.75  # value function loss weight
 DEFAULT_MAX_GRAD_NORM = 0.5  # gradient clipping threshold
 
@@ -50,7 +48,7 @@ DEFAULT_LATENT_DIM = 64
 def make_ppo_agent(
     env: gym.Env,
     n_steps: int = DEFAULT_N_STEPS,
-    batch_size: int | None = None,
+    batch_size: int = DEFAULT_BATCH_SIZE,
     n_epochs: int = DEFAULT_N_EPOCHS,
     gamma: float = DEFAULT_GAMMA,
     learning_rate: float = DEFAULT_LR,
@@ -68,19 +66,16 @@ def make_ppo_agent(
 ) -> PPO:
     """Create a PPO agent with the QuetsalGNNPolicy.
 
-    batch_size is set equal to n_steps (one minibatch per
-    update avoids SB3 trying to stack variable-size graph tensors).
-
     Parameters
     ----------
     env           : PassManagerEnv instance (or VecEnv wrapper).
-    n_steps       : rollout length before each PPO update.
+    n_steps       : rollout length.
     n_epochs      : gradient update iterations per rollout.
     gamma         : discount factor for future rewards.
     learning_rate : Adam learning rate for the GNN + heads.
     clip_range    : PPO clipping parameter (epsilon).
     ent_coef      : entropy coefficient — higher = more exploration.
-    gae_lambda    : GAE smoothing factor (0=TD, 1=Monte Carlo).
+    gae_lambda    : GAE smoothing factor.
     vf_coef       : weight of value function loss in total loss.
     max_grad_norm : gradient clipping threshold.
     hidden_dim    : GINEConv MLP hidden width.
@@ -94,12 +89,11 @@ def make_ppo_agent(
     -------
     SB3 PPO model ready for .learn() calls.
     """
-    _batch_size = batch_size if batch_size is not None else n_steps
     return PPO(
         policy=QuetsalGNNPolicy,
         env=env,
         n_steps=n_steps,
-        batch_size=_batch_size,  # default: single minibatch = full rollout (see gnn_policy.py)
+        batch_size=batch_size,
         n_epochs=n_epochs,
         gamma=gamma,
         learning_rate=learning_rate,

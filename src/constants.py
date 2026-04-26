@@ -35,9 +35,6 @@ HERON_R2_BASIS: list[str] = ["cz", "id", "rx", "rz", "rzz", "sx", "x"]
 # Action space — Qiskit optimization passes available to the RL agent
 #
 # Source: Qiskit 2.3 builtin_plugins.py → OptimizationPassManager.pass_manager()
-# Includes all Rust-backed optimization passes — not just those used by the
-# default levels.  The agent learns which passes are useful and in what order;
-# restricting to only L1-L3 defaults would cap performance at those levels.
 #
 # Termination logic in default Qiskit (for reference):
 #   L1, L2 — fixed-point check: stops when size AND depth stop decreasing
@@ -51,28 +48,19 @@ HERON_R2_BASIS: list[str] = ["cz", "id", "rx", "rz", "rzz", "sx", "x"]
 #   OptimizeCliffordT              — Clifford+T path only; Heron r2 is not Clifford+T
 # ---------------------------------------------------------------------------
 ACTION_LABELS: list[str] = [
-    "Optimize1qGatesDecomposition",    # 0  L1,L2,L3 — 1q gate chain decomposition
-    "CommutativeInverseCancellation",  # 1  L2,L3    — inverse + commutation-based
-    #              cancellation in one pass; supersedes the separate
-    #              InverseCancellation (L1) + CommutativeCancellation (L2,L3)
-    #              and removes action-space redundancy.
-    "ConsolidateAndSynthesize",        # 2  macro    — ConsolidateBlocks → UnitarySynthesis
-    #              Qiskit never uses CB without US;
-    #              combining removes the 2-step credit
-    #              assignment problem entirely.
-    # "RemoveIdentityEquivalent",      # disabled — approx-aware identity removal
-    "OptimizeCliffords",               # 3  combines consecutive Clifford gates into a
-    #              single optimal Clifford via synthesis; directly reduces 2q gate
-    #              count on Clifford-heavy families (qv, clifford_su4, clifford_su4_su8)
-    #              that peephole passes leave behind.
-    "Split2QUnitaries",                # 4  splits near-separable 2q unitaries into two
-    #              1q gates (KAK coeff ≈ 0) after ConsolidateBlocks; removes a 2q gate
-    #              entirely when the consolidated block is near-identity.
-    "ZXFullReduce",                    # 5  pyzx.simplify.full_reduce() via QASM round-trip;
+    "Optimize1qGatesDecomposition",  # 0  L1,L2,L3 — 1q gate chain decomposition.
+    "CommutativeInverseCancellation",  # 1  commutation-aware inverse cancellation.
+    "ConsolidateAndSynthesize",  # 2  macro — ConsolidateBlocks → UnitarySynthesis.
+    #              Qiskit never uses CB without US; combining removes the 2-step credit assignment problem.
+    "OptimizeCliffords",  # 3  OptimizeCliffords produces provably near-optimal Clifford decomposition
+    #              for large Clifford sub-circuits (Random Clifford, Clifford-SU4 families).
+    # "Split2QUnitaries",              # REMOVED — genuinely subsumed by ConsolidateAndSynthesize.
+    "ZXFullReduce",  # 4  pyzx.simplify.full_reduce() via QASM round-trip.
     #              ZX-calculus spider fusion + phase gadget reduction + Clifford simp.
-    #              Equivalent to TKET's ZXGraphlikeOptimisation + CliffordSimp combined.
     #              Highest 2q-reduction ceiling; most effective on Clifford-heavy circuits.
-    "DoNothing",                       # 6  terminate episode
+    "RemoveIdentityEquivalent",  # 5  approx-aware identity removal. Cleans up near-identity
+    #              1q/2q blocks left after ZXFullReduce extraction or KAK decomposition.
+    "DoNothing",  # 6  terminate episode
 ]
 NUM_ACTIONS: int = len(ACTION_LABELS)
 
@@ -84,7 +72,6 @@ NODE_DIM: int = 10  # total node feature dimension
 EDGE_DIM: int = 6  # total edge feature dimension (src_role[3] + dst_role[3])
 
 # Gate vocabulary — strictly Heron r2 native basis gates only.
-# No ecr/cx aliases — those are Eagle-era gates absent on Heron r2 hardware.
 # A properly transpiled ISA circuit on any target backend will only contain
 # these six gate names in the optimisation-stage DAG.
 GATE_INDEX: dict[str, int] = {
@@ -98,7 +85,7 @@ GATE_INDEX: dict[str, int] = {
 
 # Clifford gates among the 6:
 #   cz, sx, x  → Clifford  (singly-controlled Pauli / standard generators)
-#   rz, rx, rzz → NOT Clifford  (continuous rotation; Clifford group is finite)
+#   rz, rx, rzz → NOT Clifford  (continuous rotation)
 CLIFFORD_GATES: frozenset[str] = frozenset({"cz", "sx", "x"})
 
 # Gates skipped entirely when building the graph.
@@ -126,7 +113,7 @@ DEPTH_PENALTY_WEIGHT: float = (
 TRUNCATION_PENALTY: float = (
     0.05  # penalty when episode hits MAX_STEPS without DoNothing
 )
-TERMINAL_BONUS: float = 0.1
+TERMINAL_BONUS: float = 0.1  # Bonus when terminated using DoNothing
 STEP_PENALTY: float = 0.001  # small cost per non-DoNothing action; incentivises
 # the agent to stop unless a pass genuinely helps
 
@@ -138,8 +125,8 @@ STEP_PENALTY: float = 0.001  # small cost per non-DoNothing action; incentivises
 # MAX_NODES / MAX_EDGES and add boolean masks to mark real vs padding.
 # The GNN policy strips padding using the masks before message passing.
 #
-# Sizing rationale (worst case: 8-qubit Clifford-SU4-SU8, n_blocks=16):
-#   Each SU(8) → ~30 basis gates after synthesis; 16 blocks × 30 ≈ 480 nodes.
+# Sizing rationale (worst case: 10-qubit Clifford-SU4-SU8, n_blocks=21):
+#   Each SU(8) → ~30 basis gates after synthesis; 21 blocks × 30 ≈ 630 nodes.
 #   Edges ≈ 2× nodes for typical sequential circuits.
 #   1024/2048 gives ~2× safety margin.
 # ---------------------------------------------------------------------------
@@ -159,7 +146,6 @@ MIN_STEPS_BEFORE_STOP: int = 3  # DoNothing is ignored until this many steps hav
 #   TRAINING_MODE = 1  FULL   — proper training run (default)
 #
 # train.py reads this and overrides its argparse defaults accordingly.
-# Override from CLI with --mode 0 or --mode 1 to ignore this setting.
 # ---------------------------------------------------------------------------
 TRAINING_MODE: int = 1  # 0 = quick, 1 = full
 
@@ -182,8 +168,9 @@ TRAINING_MODE_ARGS: dict[int, dict] = {
     1: {  # FULL — proper training
         "count_per_family": 500,
         "total_steps": 300_000,
-        "n_steps": 1024,
-        "n_epochs": 5,
+        "n_steps": 128,
+        "batch_size": 64,
+        "n_epochs": 3,
         "checkpoint_freq": 10_000,
     },
 }
@@ -191,18 +178,27 @@ TRAINING_MODE_ARGS: dict[int, dict] = {
 # ---------------------------------------------------------------------------
 # Curriculum learning — staged training schedule
 #
-# Stage 1 — Foundation: non-parametric families only (no random angles).
-#   Agent learns structural optimisation (cancellation, consolidation) on
-#   fixed-gate circuits before seeing parametric noise.
+# Stage 1 — Foundation: 4 non-parametric families (no random rotation angles).
+#   Agent learns structural optimisation (cancellation, consolidation, ZX) on
+#   fixed-gate circuits before encountering parametric noise.
+#   Families: QV, Clifford-SU4, Clifford-SU4-SU8, Random Clifford.
 #   Promoted when eval_mean_reward > 0.25 AND donothing_per_ep < 1.5
 #   for 2 consecutive eval checkpoints.
 #
-# Stage 2 — Parametric exposure: blend in QAOA/IQP/EfficientSU2 gradually.
-#   Starts at 30% parametric mix, increases +10% per passing eval checkpoint
-#   (max 60%). Entropy decays 0.05 → 0.02 over the stage.
-#   Promoted when reward stabilises (δ < 0.02 over last 2 evals).
+# Stage 2 — Parametric exposure: introduces IQP (non-param) + QAOA/EfficientSU2 (param).
+#   Parametric mix: 10% → 15% → 20% (2 blend steps of +5% each, one per passing eval).
+#   Entropy decays 0.05 → 0.02 over the stage.
+#   Parametric circuits yield near-zero 2q reduction — included only to
+#   shape early-termination behaviour; capped at 20% to preserve reward signal.
+#   Promoted when reward stabilises (|Δreward| < 0.02 for 2 consecutive evals)
+#   AND eval_mean_reward ≥ 0.10 (safety floor: agent not broken).
+#   Note: stage 2 uses reward_delta not donothing_per_ep because DoNothing
+#   rate should INCREASE in stage 2 (agent learns to exit quickly on
+#   un-reducible parametric circuits) — gating on it would be wrong.
 #
-# Stage 3 — Balanced fine-tune: all 7 families, equal weight.
+# Stage 3 — Balanced fine-tune: all 8 families, equal weight within groups.
+#   Non-param (5 families): 17% each = 85% total.
+#   Param (3 families, incl. RealAmplitudes introduced here): 5% each = 15% total.
 #   Low LR (1e-4), tight clip range (0.1), early-exit penalty for DoNothing
 #   before MIN_STEPS_BEFORE_STOP to prevent lazy termination.
 #
@@ -210,53 +206,95 @@ TRAINING_MODE_ARGS: dict[int, dict] = {
 # ---------------------------------------------------------------------------
 _ALL_FAMILIES = [
     "qv",
-    "qaoa",
     "clifford_su4_su8",
     "clifford_su4",
     "iqp",
+    "random_clifford",
+    "qaoa",
     "efficient_su2",
     "real_amplitudes",
 ]
 
+# Stage 3 weights: equal within groups — non-param 17% each (85% total),
+# param 5% each (15% total).  Continuous with stage 2 which ends at 20% param.
+_STAGE3_WEIGHTS = {
+    "qv": 0.17,
+    "clifford_su4_su8": 0.17,
+    "clifford_su4": 0.17,
+    "iqp": 0.17,
+    "random_clifford": 0.17,
+    "qaoa": 0.05,
+    "efficient_su2": 0.05,
+    "real_amplitudes": 0.05,
+}
+
 CURRICULUM_STAGES: dict[int, dict] = {
     1: {
-        "families": ["qv", "clifford_su4", "clifford_su4_su8"],
-        "family_weights": {"qv": 0.40, "clifford_su4": 0.35, "clifford_su4_su8": 0.25},
-        "max_steps": 150_000,  # foundation — non-parametric structural learning
-        "ent_coef": 0.03,
+        # 4 non-parametric families only.
+        # Agent learns structural optimisation (cancellation, consolidation, ZX)
+        # before encountering parametric noise or IQP topology.
+        "families": [
+            "qv",
+            "clifford_su4",
+            "clifford_su4_su8",
+            "random_clifford",
+        ],
+        "family_weights": {
+            "qv": 0.30,
+            "clifford_su4": 0.25,
+            "clifford_su4_su8": 0.25,
+            "random_clifford": 0.20,
+        },
+        "max_steps": 150_000,
+        "ent_coef": 0.05,
         "promotion": {
-            "eval_mean_reward_min": 0.25,  # unified name across all stages
+            "eval_mean_reward_min": 0.25,
             "donothing_per_ep_max": 1.5,
             "consecutive_evals": 2,
         },
     },
     2: {
+        # Introduces IQP (non-param, new topology) + QAOA/EfficientSU2 (param).
+        # Parametric mix: 10% → 15% → 20% over 2 blend steps (+5% per passing eval).
+        # Parametric circuits show near-zero 2q reduction — included only to shape
+        # early-termination behaviour; capped at 20% to avoid diluting training signal.
         "families": [
             "qv",
             "clifford_su4",
             "clifford_su4_su8",
-            "qaoa",
             "iqp",
+            "random_clifford",
+            "qaoa",
             "efficient_su2",
         ],
-        "nonparam_families": ["qv", "clifford_su4", "clifford_su4_su8"],
-        "param_families": ["qaoa", "iqp", "efficient_su2"],
-        "param_start_mix": 0.30,
-        "param_blend_step": 0.10,
-        "param_max_mix": 0.60,
-        "max_steps": 100_000,  # parametric blend
-        "ent_coef_start": 0.05,
+        "nonparam_families": [
+            "qv",
+            "clifford_su4",
+            "clifford_su4_su8",
+            "iqp",
+            "random_clifford",
+        ],
+        "param_families": ["qaoa", "efficient_su2"],
+        "param_start_mix": 0.10,
+        "param_blend_step": 0.05,
+        "param_max_mix": 0.20,
+        "max_steps": 100_000,
+        "ent_coef_start": 0.04,
         "ent_coef_end": 0.02,
         "step_penalty": 0.003,
         "promotion": {
-            "eval_mean_reward_min": 0.10,  # same key as stage 1
-            "reward_delta_max": 0.02,  # |reward[t] - reward[t-1]| < 0.02 (stability, not clip_range)
+            "eval_mean_reward_min": 0.10,  # safety floor only — ensures agent isn't broken;
+            #   not a quality bar. 0.10 fires only if non-param performance has degraded.
+            #   Primary criterion is reward_delta_max below.
+            "reward_delta_max": 0.02,  # convergence gate: |reward[t] - reward[t-1]| < 0.02
+            #   for 2 consecutive 10K-step evals (< 10% relative change at reward ~0.18).
+            #   Detects learning plateau on the current parametric blend — ready for stage 3.
             "consecutive_evals": 2,
         },
     },
     3: {
         "families": _ALL_FAMILIES,
-        "family_weights": {f: 1 / 7 for f in _ALL_FAMILIES},
+        "family_weights": _STAGE3_WEIGHTS,
         "max_steps": 50_000,  # balanced fine-tune  — total 300K
         "lr": 1e-4,
         "ent_coef": 0.01,

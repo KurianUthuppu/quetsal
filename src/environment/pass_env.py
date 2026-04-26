@@ -5,7 +5,6 @@
 # The agent selects optimization passes one at a time.  After each pass,
 # the env auto-runs GatesInBasis + conditional BasisTranslator to ensure
 # the DAG stays in the Heron r2 basis — mirroring Qiskit's builtin_plugins.py
-# optimization loop (lines 593-611).
 # =============================================================================
 
 from __future__ import annotations
@@ -17,7 +16,7 @@ from typing import Any, Optional
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
-from qiskit.converters import circuit_to_dag, dag_to_circuit
+from qiskit.converters import circuit_to_dag
 from qiskit.dagcircuit import DAGCircuit
 from qiskit.circuit.equivalence_library import SessionEquivalenceLibrary as sel
 from qiskit.transpiler.passes import BasisTranslator
@@ -27,8 +26,8 @@ from qiskit.transpiler.passes.optimization import (
     CommutativeInverseCancellation,
     ConsolidateBlocks,
     OptimizeCliffords,
-    Split2QUnitaries,
-    # RemoveIdentityEquivalent,  # disabled — not in current action space
+    # Split2QUnitaries,                # removed
+    RemoveIdentityEquivalent,
     ContractIdleWiresInControlFlow,
 )
 from qiskit.transpiler.passes.synthesis.unitary_synthesis import UnitarySynthesis
@@ -117,6 +116,7 @@ class PassManagerEnv(gym.Env):
         self.donothing_early_penalty = donothing_early_penalty
 
         # -- Action space: 7 discrete actions (6 passes + DoNothing) -----------
+        # Indices 0-5: real passes; index 6: DoNothing (terminate).
         self.action_space = spaces.Discrete(NUM_ACTIONS)
 
         # -- Observation space: padded fixed-size tensors ----------------------
@@ -167,20 +167,20 @@ class PassManagerEnv(gym.Env):
 
         Action 2 is the ConsolidateAndSynthesize macro — stored as a 2-tuple
         (ConsolidateBlocks, UnitarySynthesis) and run sequentially in step().
-        Action 5 is ZXFullReduce (PyzxFullReduce) — falls back to unchanged
+        Action 4 is ZXFullReduce (PyzxFullReduce) — falls back to unchanged
         DAG on any failure so it can never crash an episode.
         The last action (DoNothing, index 6) is handled as a special case in step().
         """
         return [
             Optimize1qGatesDecomposition(basis=self.basis_gates),  # 0
-            CommutativeInverseCancellation(),                       # 1
+            CommutativeInverseCancellation(),  # 1
             (
-                ConsolidateBlocks(basis_gates=self.basis_gates),    # 2 macro
+                ConsolidateBlocks(basis_gates=self.basis_gates),  # 2 macro
                 UnitarySynthesis(self.basis_gates),
             ),
-            OptimizeCliffords(),                                    # 3
-            Split2QUnitaries(),                                     # 4
-            PyzxFullReduce(),                                       # 5
+            OptimizeCliffords(),  # 3
+            PyzxFullReduce(),  # 4
+            RemoveIdentityEquivalent(),  # 5
             # DoNothing is action 6, handled as special case in step()
         ]
 
@@ -332,7 +332,8 @@ class PassManagerEnv(gym.Env):
         Returns
         -------
         observation : dict of numpy arrays (PyG-compatible)
-        reward      : float — normalized 2q gate reduction this step
+        reward      : float — normalized 2q reduction with depth penalty and step
+                        cost; fixed bonus/penalty on termination
         terminated  : bool — True if DoNothing was selected
         truncated   : bool — True if max_steps reached
         info        : dict with diagnostic metrics
@@ -345,14 +346,11 @@ class PassManagerEnv(gym.Env):
 
         # -- DoNothing → terminate episode -------------------------------------
         # Ignore DoNothing for the first MIN_STEPS_BEFORE_STOP steps so the
-        # agent is forced to apply at least one real pass before it can stop.
+        # agent is forced to apply at requisite no. of min. real pass before it can stop.
         # This prevents the untrained policy from collapsing to ep_len=1.
         if action == NUM_ACTIONS - 1 and self._step_count >= MIN_STEPS_BEFORE_STOP:
             terminated = True
             # Terminal bonus: fixed reward for choosing to stop at the right time.
-            # A cumulative-reduction bonus double-counts step rewards already
-            # received and teaches the agent to do one pass then bail early.
-            # A small fixed constant rewards timely termination without that bias.
             reward = TERMINAL_BONUS
             try:
                 obs = self._encode_observation()
@@ -365,7 +363,9 @@ class PassManagerEnv(gym.Env):
         # If DoNothing was suppressed (too early), treat it as a no-op step:
         # skip pass application and apply optional early-exit penalty (stage 3).
         if action == NUM_ACTIONS - 1:
-            reward = -self.donothing_early_penalty  # stored positive, negated here (0.0 unless stage 3)
+            reward = (
+                -self.donothing_early_penalty
+            )  # stored positive, negated here (0.0 unless stage 3)
             self._prev_2q = _count_2q(self._dag)
             if self._step_count >= self.max_steps:
                 truncated = True

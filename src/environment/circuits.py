@@ -8,22 +8,17 @@
 #
 # Circuit families (7 total):
 #   - Quantum Volume (QV): layers of random SU(4) on shuffled qubit pairs
-#   - QAOA MaxCut: via QAOAAnsatz on random Erdős–Rényi graphs
+#   - QAOA MaxCut: via QAOAAnsatz on random graphs
 #   - Clifford-SU4-SU8: mix of random Cliffords + SU(4) + SU(8) gates
 #   - Clifford-SU4: mixed random Cliffords + random SU(4) gates
 #   - IQP: commuting gate circuits via Qiskit's random_iqp
 #   - EfficientSU2: hardware-efficient VQE ansatz (RY+RZ + CX layers)
 #   - RealAmplitudes: real-valued VQE ansatz (RY + CX layers)
 #
-# Random SU4 and Random SU8 as standalone families are replaced by
-# Clifford-SU4-SU8 (per the Quantinuum paper).  QV already covers the
-# pure random-SU4 landscape; Clifford-SU4-SU8 combines density (SU8) +
-# simplifiability (Clifford) + non-simplifiable (SU4) in one family.
-#
 # Parametric circuits (QAOA, EfficientSU2, RealAmplitudes) are bound with
 # random parameter values — the transpiler needs concrete angles to optimize.
 #
-# Coupling map: line topology (sufficient for 3-8 qubit training circuits).
+# Coupling map: line topology (sufficient for 3-10 qubit training circuits).
 # A real Heron r2 heavy-hex map would be used for final benchmarking.
 # =============================================================================
 
@@ -37,6 +32,8 @@ __all__ = [
     "generate_iqp_circuits",
     "generate_efficient_su2_circuits",
     "generate_real_amplitudes_circuits",
+    "generate_pauli_gadget_circuits",
+    "generate_random_clifford_circuits",
     "generate_training_circuits",
     "generate_weighted_circuits",
 ]
@@ -74,9 +71,9 @@ def _transpile_to_opt_stage(
 ) -> list[QuantumCircuit]:
     """Transpile circuits through init+layout+routing+translation only.
 
-    Uses optimization_level=1 for good layout+routing (VF2Layout +
-    StochasticSwap), but replaces the optimization and scheduling stages
-    with empty PassManagers so the RL agent receives un-optimized circuits.
+    Uses optimization_level=1 for good layout+routing but replaces the
+    optimization and scheduling stages with empty PassManagers
+    so the RL agent receives un-optimized circuits.
 
     Circuits that exceed MAX_NODES after transpilation are silently dropped —
     they would overflow the padded observation buffer.
@@ -100,7 +97,8 @@ def _transpile_to_opt_stage(
         # in basis cleanup can roughly double a DAG's node count mid-episode before
         # re-synthesising it smaller, so we need ~2x headroom.
         two_q = sum(
-            1 for inst in transpiled.data
+            1
+            for inst in transpiled.data
             if len(inst.qubits) >= 2 and inst.operation.name not in SKIP_GATES
         )
         if two_q == 0:
@@ -115,11 +113,7 @@ def _transpile_to_opt_stage(
 
 
 def _bind_random_params(qc: QuantumCircuit, rng: np.random.Generator) -> QuantumCircuit:
-    """Bind random values to all parameters in a parametric circuit.
-
-    The transpiler cannot optimize parametric circuits (gate angles affect
-    which simplifications are valid), so we bind concrete values first.
-    """
+    """Bind random values to all parameters in a parametric circuit."""
     if not qc.parameters:
         return qc
     params = {p: float(rng.uniform(0, 2 * np.pi)) for p in qc.parameters}
@@ -130,7 +124,7 @@ def _bind_random_params(qc: QuantumCircuit, rng: np.random.Generator) -> Quantum
 
 
 def generate_qv_circuits(
-    n_qubits_range: tuple[int, int] = (3, 8),
+    n_qubits_range: tuple[int, int] = (3, 10),
     count: int = 100,
     seed: int = 42,
     basis_gates: list[str] | None = None,
@@ -175,7 +169,7 @@ def _maxcut_cost_op(n: int, edges: list[tuple[int, int]]) -> SparsePauliOp:
 
 
 def generate_qaoa_circuits(
-    n_qubits_range: tuple[int, int] = (3, 8),
+    n_qubits_range: tuple[int, int] = (3, 10),
     count: int = 100,
     seed: int = 42,
     p_layers: int = 2,
@@ -183,8 +177,8 @@ def generate_qaoa_circuits(
 ) -> list[QuantumCircuit]:
     """Generate QAOA MaxCut circuits transpiled to target basis.
 
-    Uses Qiskit's qaoa_ansatz with random MaxCut cost operators on
-    Erdős–Rényi graphs (edge probability 0.5).  Parameters are bound
+    Uses Qiskit's qaoa_ansatz with random MaxCut cost operators graphs
+    with edge probability as 0.5.  Parameters are bound
     to random values before transpilation.
 
     Parameters
@@ -226,7 +220,7 @@ def generate_qaoa_circuits(
 
 
 def generate_clifford_su4_su8_circuits(
-    n_qubits_range: tuple[int, int] = (3, 8),
+    n_qubits_range: tuple[int, int] = (3, 10),
     count: int = 100,
     seed: int = 42,
     basis_gates: list[str] | None = None,
@@ -237,10 +231,6 @@ def generate_clifford_su4_su8_circuits(
       - Clifford (2q): analytically simplifiable, finite group
       - SU(4) (2q):   non-simplifiable random 2-qubit unitary
       - SU(8) (3q):   non-simplifiable random 3-qubit unitary → dense 2q output
-
-    This is the Clifford-SU4-SU8 family from the Quantinuum paper (arXiv:2601.21629).
-    It subsumes the standalone SU4 and SU8 families while adding Clifford structure
-    that creates genuine optimization opportunities.
 
     Parameters
     ----------
@@ -289,17 +279,13 @@ def generate_clifford_su4_su8_circuits(
 
 
 def generate_clifford_su4_circuits(
-    n_qubits_range: tuple[int, int] = (3, 8),
+    n_qubits_range: tuple[int, int] = (3, 10),
     count: int = 100,
     seed: int = 42,
     clifford_fraction: float = 0.5,
     basis_gates: list[str] | None = None,
 ) -> list[QuantumCircuit]:
     """Generate circuits mixing random Clifford subcircuits and random SU(4) gates.
-
-    Clifford-origin blocks are analytically simplifiable (finite group),
-    while SU(4)-origin blocks are not.  This tests whether the agent
-    learns to aggressively optimize Clifford regions.
 
     Parameters
     ----------
@@ -340,7 +326,7 @@ def generate_clifford_su4_circuits(
 
 
 def generate_iqp_circuits(
-    n_qubits_range: tuple[int, int] = (3, 8),
+    n_qubits_range: tuple[int, int] = (3, 10),
     count: int = 100,
     seed: int = 42,
     basis_gates: list[str] | None = None,
@@ -348,8 +334,7 @@ def generate_iqp_circuits(
     """Generate IQP circuits transpiled to target basis.
 
     Uses Qiskit's random_iqp generator.  IQP circuits have the structure
-    H^n → Diagonal(T, CS gates) → H^n.  All diagonal gates commute,
-    producing circuits where CommutativeCancellation is especially effective.
+    H^n → Diagonal(T, CS gates) → H^n.
 
     Parameters
     ----------
@@ -374,7 +359,7 @@ def generate_iqp_circuits(
 
 
 def generate_efficient_su2_circuits(
-    n_qubits_range: tuple[int, int] = (3, 8),
+    n_qubits_range: tuple[int, int] = (3, 10),
     count: int = 100,
     seed: int = 42,
     reps: int = 3,
@@ -411,7 +396,7 @@ def generate_efficient_su2_circuits(
 
 
 def generate_real_amplitudes_circuits(
-    n_qubits_range: tuple[int, int] = (3, 8),
+    n_qubits_range: tuple[int, int] = (3, 10),
     count: int = 100,
     seed: int = 42,
     reps: int = 3,
@@ -444,51 +429,128 @@ def generate_real_amplitudes_circuits(
     return _transpile_to_opt_stage(raw, basis, seed, family="real_amplitudes")
 
 
+# ── Pauli Gadget circuits ─────────────────────────────────────────────────────
+
+
+def generate_pauli_gadget_circuits(
+    n_qubits_range: tuple[int, int] = (3, 10),
+    count: int = 100,
+    seed: int = 42,
+    n_layers_range: tuple[int, int] = (2, 6),
+    basis_gates: list[str] | None = None,
+) -> list[QuantumCircuit]:
+    """Generate Pauli gadget circuits (Trotterized Hamiltonian structure).
+
+    Alternating layers of random RZ rotations and
+    CZ entanglement — mimics exp(iθ Z⊗Z) Trotter steps from Hamiltonian
+    simulation.
+
+    Parameters
+    ----------
+    n_qubits_range  : (min, max) inclusive range for random qubit count.
+    count           : number of circuits to generate.
+    seed            : RNG seed for reproducibility.
+    n_layers_range  : (min, max) inclusive range for Trotter layer count.
+    basis_gates     : target basis gates (default: HERON_R2_BASIS).
+    """
+    basis = basis_gates or HERON_R2_BASIS
+    rng = np.random.default_rng(seed)
+
+    raw = []
+    for _ in range(count):
+        n = int(rng.integers(n_qubits_range[0], n_qubits_range[1] + 1))
+        n_layers = int(rng.integers(n_layers_range[0], n_layers_range[1] + 1))
+
+        qc = QuantumCircuit(n)
+        for layer in range(n_layers):
+            # RZ layer: diagonal phase gadgets
+            for q in range(n):
+                theta = float(rng.uniform(0, 2 * np.pi))
+                qc.rz(theta, q)
+            # CZ entanglement layer: alternating even/odd pairs per layer
+            offset = layer % 2
+            for q in range(offset, n - 1, 2):
+                qc.cz(q, q + 1)
+        raw.append(qc)
+
+    return _transpile_to_opt_stage(raw, basis, seed, family="pauli_gadget")
+
+
+# ── Random Clifford circuits ──────────────────────────────────────────────────
+
+
+def generate_random_clifford_circuits(
+    n_qubits_range: tuple[int, int] = (3, 10),
+    count: int = 100,
+    seed: int = 42,
+    basis_gates: list[str] | None = None,
+) -> list[QuantumCircuit]:
+    """Generate pure random Clifford circuits.
+
+    Random n-qubit Cliffords via Qiskit's random_clifford().
+
+    Parameters
+    ----------
+    n_qubits_range : (min, max) inclusive range for random qubit count.
+    count          : number of circuits to generate.
+    seed           : RNG seed for reproducibility.
+    basis_gates    : target basis gates (default: HERON_R2_BASIS).
+    """
+    basis = basis_gates or HERON_R2_BASIS
+    rng = np.random.default_rng(seed)
+
+    raw = []
+    for _ in range(count):
+        n = int(rng.integers(n_qubits_range[0], n_qubits_range[1] + 1))
+        cliff = random_clifford(n, seed=int(rng.integers(0, 2**31)))
+        qc = cliff.to_circuit()
+        raw.append(qc)
+
+    return _transpile_to_opt_stage(raw, basis, seed, family="random_clifford")
+
+
 # ── Convenience: mixed training pool ─────────────────────────────────────────
 
 
 def generate_training_circuits(
-    n_qubits_range: tuple[int, int] = (3, 8),
+    n_qubits_range: tuple[int, int] = (3, 10),
     count_per_family: int = 100,
     seed: int = 42,
     basis_gates: list[str] | None = None,
+    families: list[str] | None = None,
 ) -> list[QuantumCircuit]:
-    """Generate a mixed pool of training circuits from all 7 families.
+    """Generate a mixed pool of training circuits from all 8 families (or a subset).
 
-    Returns 7 × count_per_family circuits, shuffled.
+    Returns count_per_family circuits per included family, shuffled.
     Different seeds per family ensure no overlap.
+
+    Parameters
+    ----------
+    families : if provided, only generate these families. Valid names:
+               qv, qaoa, clifford_su4_su8, clifford_su4, iqp,
+               efficient_su2, real_amplitudes, random_clifford.
+               None (default) includes all 8 families.
     """
     basis = basis_gates or HERON_R2_BASIS
+    _include = set(families) if families is not None else None
+    _gen_seq = [
+        ("qv", generate_qv_circuits, 0),
+        ("qaoa", generate_qaoa_circuits, 1),
+        ("clifford_su4_su8", generate_clifford_su4_su8_circuits, 2),
+        ("clifford_su4", generate_clifford_su4_circuits, 3),
+        ("iqp", generate_iqp_circuits, 4),
+        ("efficient_su2", generate_efficient_su2_circuits, 5),
+        ("real_amplitudes", generate_real_amplitudes_circuits, 6),
+        ("random_clifford", generate_random_clifford_circuits, 7),
+    ]
     circuits = []
-    circuits.extend(generate_qv_circuits(n_qubits_range, count_per_family, seed, basis))
-    circuits.extend(
-        generate_qaoa_circuits(
-            n_qubits_range, count_per_family, seed + 1, basis_gates=basis
-        )
-    )
-    circuits.extend(
-        generate_clifford_su4_su8_circuits(
-            n_qubits_range, count_per_family, seed + 2, basis
-        )
-    )
-    circuits.extend(
-        generate_clifford_su4_circuits(
-            n_qubits_range, count_per_family, seed + 3, basis_gates=basis
-        )
-    )
-    circuits.extend(
-        generate_iqp_circuits(n_qubits_range, count_per_family, seed + 4, basis)
-    )
-    circuits.extend(
-        generate_efficient_su2_circuits(
-            n_qubits_range, count_per_family, seed + 5, basis_gates=basis
-        )
-    )
-    circuits.extend(
-        generate_real_amplitudes_circuits(
-            n_qubits_range, count_per_family, seed + 6, basis_gates=basis
-        )
-    )
+    for family_name, gen_fn, offset in _gen_seq:
+        if _include is None or family_name in _include:
+            circuits.extend(
+                gen_fn(
+                    n_qubits_range, count_per_family, seed + offset, basis_gates=basis
+                )
+            )
 
     # Shuffle so the env doesn't see families in blocks
     rng = np.random.default_rng(seed)
@@ -506,7 +568,7 @@ def generate_weighted_circuits(
     families: list[str],
     family_weights: dict[str, float],
     total_count: int,
-    n_qubits_range: tuple[int, int] = (3, 8),
+    n_qubits_range: tuple[int, int] = (3, 10),
     seed: int = 42,
     basis_gates: list[str] | None = None,
 ) -> list[QuantumCircuit]:
@@ -536,6 +598,7 @@ def generate_weighted_circuits(
             "iqp": generate_iqp_circuits,
             "efficient_su2": generate_efficient_su2_circuits,
             "real_amplitudes": generate_real_amplitudes_circuits,
+            "random_clifford": generate_random_clifford_circuits,
         }
 
     basis = basis_gates or HERON_R2_BASIS

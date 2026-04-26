@@ -8,12 +8,9 @@
 #   - Spider fusion (Clifford simplification)
 #   - Phase gadget reduction
 #   - Graph-like diagram simplification
-# This is equivalent to TKET's ZXGraphlikeOptimisation + CliffordSimp,
-# which drives the 57.7% 2q reduction in the Quantinuum paper.
 #
 # Pipeline per call:
 #   1. BasisTranslator: Heron r2 → PyZX-safe basis (cx, cz, rz, rx, x, h…)
-#      so pyzx's QASM parser doesn't see rzz / sx which it can't handle.
 #   2. dag → QuantumCircuit → QASM2 string → pyzx.Circuit
 #   3. pyzx.simplify.full_reduce()  +  g.normalize()
 #   4. pyzx.extract_circuit() → to_basic_gates() → QASM2 → Qiskit DAG
@@ -41,7 +38,16 @@ from qiskit.transpiler.passes import BasisTranslator
 # Notably absent: rzz (decomposes to cx+rz), sx (→ rx(π/2)).
 # BasisTranslator expands both using Qiskit's SessionEquivalenceLibrary.
 _PYZX_INPUT_BASIS: list[str] = [
-    "cx", "cz", "rz", "rx", "x", "h", "s", "sdg", "t", "tdg",
+    "cx",
+    "cz",
+    "rz",
+    "rx",
+    "x",
+    "h",
+    "s",
+    "sdg",
+    "t",
+    "tdg",
 ]
 
 # Skip ZX optimization on very large DAGs — full_reduce is O(n²) and slows
@@ -52,7 +58,6 @@ _MAX_NODES_FOR_ZX: int = 400
 class PyzxFullReduce(TransformationPass):
     """ZX-calculus circuit simplification via pyzx.simplify.full_reduce().
 
-    Equivalent to TKET's ZXGraphlikeOptimisation + CliffordSimp combined.
     Most effective on Clifford-heavy and Clifford+T circuits; still applies
     phase gadget fusion and spider fusion on rotation-heavy circuits.
 

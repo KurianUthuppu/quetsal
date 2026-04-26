@@ -123,11 +123,14 @@ def _run_opt_level(qc, opt_level: int, seed: int = 42) -> tuple["QuantumCircuit"
     return out, time.time() - t0
 
 
-_NONPARAM_FAMILIES = {"QV", "Clifford-SU4", "Clifford-SU4-SU8"}
+_NONPARAM_FAMILIES = {
+    "QV", "Clifford-SU4", "Clifford-SU4-SU8",
+    "IQP", "RandomClifford",
+}
 
 _ALL_FAMILY_KEYS = [
     "QV", "QAOA", "Clifford-SU4-SU8", "Clifford-SU4",
-    "IQP", "EfficientSU2", "RealAmplitudes",
+    "IQP", "EfficientSU2", "RealAmplitudes", "RandomClifford",
 ]
 
 
@@ -140,7 +143,7 @@ def _generate_tagged_circuits(
     """Generate circuits from the requested families, each tagged with its family name.
 
     ``families`` is a set of family keys (e.g. ``{"QV", "Clifford-SU4"}``).
-    Pass ``None`` (default) to include all 7 families.
+    Pass ``None`` (default) to include all 8 families.
     """
     from quetsal.src.environment.circuits import (
         generate_clifford_su4_circuits,
@@ -149,6 +152,7 @@ def _generate_tagged_circuits(
         generate_iqp_circuits,
         generate_qaoa_circuits,
         generate_qv_circuits,
+        generate_random_clifford_circuits,
         generate_real_amplitudes_circuits,
     )
     import numpy as np
@@ -162,6 +166,7 @@ def _generate_tagged_circuits(
         ("IQP",              generate_iqp_circuits(n_qubits_range, count_per_family, seed+4,  basis)),
         ("EfficientSU2",     generate_efficient_su2_circuits(n_qubits_range, count_per_family, seed+5, basis_gates=basis)),
         ("RealAmplitudes",   generate_real_amplitudes_circuits(n_qubits_range, count_per_family, seed+6, basis_gates=basis)),
+        ("RandomClifford",   generate_random_clifford_circuits(n_qubits_range, count_per_family, seed+7, basis_gates=basis)),
     ]
 
     tagged: list[tuple[QuantumCircuit, str]] = []
@@ -336,7 +341,7 @@ def _parse_args():
     p.add_argument("--n-circuits", type=int, default=50,
                    help="Number of circuits per family to benchmark")
     p.add_argument("--min-qubits", type=int, default=3)
-    p.add_argument("--max-qubits", type=int, default=8)
+    p.add_argument("--max-qubits", type=int, default=10)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--opt-levels", type=int, nargs="+", default=[1, 2, 3])
     p.add_argument(
@@ -344,7 +349,7 @@ def _parse_args():
         metavar="FAMILY",
         help=(
             "Families to include. Use 'nonparam' as a shorthand for "
-            "QV Clifford-SU4 Clifford-SU4-SU8. "
+            "QV Clifford-SU4 Clifford-SU4-SU8 IQP RandomClifford. "
             f"Available: {', '.join(_ALL_FAMILY_KEYS)}"
         ),
     )
@@ -371,7 +376,7 @@ def main():
             print(f"[benchmark] ERROR: unknown families: {unknown}. Valid: {_ALL_FAMILY_KEYS}")
             return
 
-    family_label = ", ".join(sorted(families)) if families else "all 7"
+    family_label = ", ".join(sorted(families)) if families else "all 8"
     print(f"[benchmark] Generating {args.n_circuits} circuits per family ({family_label})...")
     tagged_circuits = _generate_tagged_circuits(
         n_qubits_range=(args.min_qubits, args.max_qubits),

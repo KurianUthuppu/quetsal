@@ -49,18 +49,16 @@ HERON_R2_BASIS: list[str] = ["cz", "id", "rx", "rz", "rzz", "sx", "x"]
 # ---------------------------------------------------------------------------
 ACTION_LABELS: list[str] = [
     "Optimize1qGatesDecomposition",  # 0  L1,L2,L3 — 1q gate chain decomposition.
-    "CommutativeInverseCancellation",  # 1  commutation-aware inverse cancellation.
-    "ConsolidateAndSynthesize",  # 2  macro — ConsolidateBlocks → UnitarySynthesis.
+    # "CommutativeInverseCancellation",  # DISABLED — rarely selected; ablation run without it.
+    "ConsolidateAndSynthesize",  # 1  macro — ConsolidateBlocks → UnitarySynthesis.
     #              Qiskit never uses CB without US; combining removes the 2-step credit assignment problem.
-    "OptimizeCliffords",  # 3  OptimizeCliffords produces provably near-optimal Clifford decomposition
-    #              for large Clifford sub-circuits (Random Clifford, Clifford-SU4 families).
+    # "OptimizeCliffords",  # DISABLED — rarely selected; ablation run without it.
     # "Split2QUnitaries",              # REMOVED — genuinely subsumed by ConsolidateAndSynthesize.
-    "ZXFullReduce",  # 4  pyzx.simplify.full_reduce() via QASM round-trip.
+    "ZXFullReduce",  # 2  pyzx.simplify.full_reduce() via QASM round-trip.
     #              ZX-calculus spider fusion + phase gadget reduction + Clifford simp.
     #              Highest 2q-reduction ceiling; most effective on Clifford-heavy circuits.
-    "RemoveIdentityEquivalent",  # 5  approx-aware identity removal. Cleans up near-identity
-    #              1q/2q blocks left after ZXFullReduce extraction or KAK decomposition.
-    "DoNothing",  # 6  terminate episode
+    # "RemoveIdentityEquivalent",  # DISABLED — rarely selected; ablation run without it.
+    "DoNothing",  # 3  terminate episode
 ]
 NUM_ACTIONS: int = len(ACTION_LABELS)
 

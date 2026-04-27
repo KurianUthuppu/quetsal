@@ -23,11 +23,11 @@ from qiskit.transpiler.passes import BasisTranslator
 from qiskit.transpiler.passes.utils.gates_basis import GatesInBasis
 from qiskit.transpiler.passes.optimization import (
     Optimize1qGatesDecomposition,
-    CommutativeInverseCancellation,
+    # CommutativeInverseCancellation,  # DISABLED — ablation
     ConsolidateBlocks,
-    OptimizeCliffords,
+    # OptimizeCliffords,               # DISABLED — ablation
     # Split2QUnitaries,                # removed
-    RemoveIdentityEquivalent,
+    # RemoveIdentityEquivalent,        # DISABLED — ablation
     ContractIdleWiresInControlFlow,
 )
 from qiskit.transpiler.passes.synthesis.unitary_synthesis import UnitarySynthesis
@@ -165,23 +165,23 @@ class PassManagerEnv(gym.Env):
     def _build_passes(self) -> list:
         """Instantiate the optimization passes (indices 0 to NUM_ACTIONS-2).
 
-        Action 2 is the ConsolidateAndSynthesize macro — stored as a 2-tuple
+        Action 1 is the ConsolidateAndSynthesize macro — stored as a 2-tuple
         (ConsolidateBlocks, UnitarySynthesis) and run sequentially in step().
-        Action 4 is ZXFullReduce (PyzxFullReduce) — falls back to unchanged
+        Action 2 is ZXFullReduce (PyzxFullReduce) — falls back to unchanged
         DAG on any failure so it can never crash an episode.
-        The last action (DoNothing, index 6) is handled as a special case in step().
+        The last action (DoNothing, index 3) is handled as a special case in step().
         """
         return [
             Optimize1qGatesDecomposition(basis=self.basis_gates),  # 0
-            CommutativeInverseCancellation(),  # 1
+            # CommutativeInverseCancellation(),  # DISABLED
             (
-                ConsolidateBlocks(basis_gates=self.basis_gates),  # 2 macro
+                ConsolidateBlocks(basis_gates=self.basis_gates),  # 1 macro
                 UnitarySynthesis(self.basis_gates),
             ),
-            OptimizeCliffords(),  # 3
-            PyzxFullReduce(),  # 4
-            RemoveIdentityEquivalent(),  # 5
-            # DoNothing is action 6, handled as special case in step()
+            # OptimizeCliffords(),  # DISABLED
+            PyzxFullReduce(),  # 2
+            # RemoveIdentityEquivalent(),  # DISABLED
+            # DoNothing is action 3, handled as special case in step()
         ]
 
     def _run_basis_cleanup(self) -> None:

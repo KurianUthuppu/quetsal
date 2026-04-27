@@ -50,6 +50,10 @@ _COLUMNS = [
     "train_approx_kl", "train_clip_fraction", "train_clip_range",
     "train_entropy_loss", "train_explained_variance", "train_learning_rate",
     "train_loss", "train_n_updates", "train_policy_gradient_loss", "train_value_loss",
+    # Run configuration and timing
+    "n_envs", "training_duration",
+    # Best model checkpoint
+    "best_model_step", "best_eval_reward",
 ]
 
 _LOG_FILE = "experiments/experiment_log.csv"
@@ -140,6 +144,31 @@ def _find_latest_log() -> Path | None:
     return logs[-1] if logs else None
 
 
+def _parse_best_model(text: str) -> dict:
+    """Return the timestep and reward of the last best-model checkpoint.
+
+    SB3 EvalCallback always prints "Eval num_timesteps=X, episode_reward=Y"
+    immediately before "New best mean reward!".  We find the last "New best"
+    occurrence, then take the last eval header before it.
+    """
+    best_positions = [m.start() for m in re.finditer(r"New best mean reward!", text)]
+    if not best_positions:
+        return {"best_model_step": "", "best_eval_reward": ""}
+
+    preceding = text[: best_positions[-1]]
+    all_evals = list(
+        re.finditer(r"Eval num_timesteps=(\d+), episode_reward=(-?[\d.eE+\-]+)", preceding)
+    )
+    if not all_evals:
+        return {"best_model_step": "", "best_eval_reward": ""}
+
+    last = all_evals[-1]
+    return {
+        "best_model_step": last.group(1),
+        "best_eval_reward": last.group(2),
+    }
+
+
 def _parse_log(log_path: Path) -> dict:
     """Extract the LAST occurrence of each metric from the training log."""
     text = log_path.read_text(encoding="utf-8", errors="replace")
@@ -182,6 +211,17 @@ def _parse_log(log_path: Path) -> dict:
         "train_n_updates":            _last(r"\|\s+n_updates\s+\|\s+([\d.]+)"),
         "train_policy_gradient_loss": _last(r"\|\s+policy_gradient_loss\s+\|\s+(-?[\d.eE+\-]+)"),
         "train_value_loss":           _last(r"\|\s+value_loss\s+\|\s+([\d.eE+\-]+)"),
+        # Run timing — parsed from "[quetsal] Training complete in X.Xs", stored as hh:mm:ss
+        "training_duration": (
+            lambda m: (
+                lambda s: f"{s//3600:02d}:{(s%3600)//60:02d}:{s%60:02d}"
+            )(int(float(m.group(1)))) if m else ""
+        )(re.search(r"\[quetsal\] Training complete in ([\d.]+)s", text)),
+        # Best model checkpoint — SB3 EvalCallback emits:
+        #   "Eval num_timesteps=X, episode_reward=Y +/- Z\n...\nNew best mean reward!"
+        # Strategy: find the last "New best mean reward!" then look backwards for the
+        # nearest "Eval num_timesteps" line — that is the checkpoint that triggered the save.
+        **_parse_best_model(text),
     }
 
 

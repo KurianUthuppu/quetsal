@@ -182,7 +182,7 @@ def _obs_to_pyg_batch(observations: dict[str, torch.Tensor]) -> Batch:
         return Data(x=x_real, edge_index=ei_real, edge_attr=ea_real)
 
     # Single observation: x is 2-D [MAX_NODES, NODE_DIM]
-    if x_raw.dim() == 2 if isinstance(x_raw, torch.Tensor) else x_raw.ndim == 2:
+    if x_raw.ndim == 2:
         nm = _t(node_mask_raw, torch.bool).squeeze()
         return Batch.from_data_list(
             [_make_data(x_raw, edge_index_raw, edge_attr_raw, nm, edge_mask_raw)]
@@ -207,8 +207,8 @@ def _obs_to_pyg_batch(observations: dict[str, torch.Tensor]) -> Batch:
             )
         else:
             real_indices = nm.nonzero(as_tuple=True)[0]
-            remap = torch.zeros(nm.shape[0], dtype=torch.long)
-            remap[real_indices] = torch.arange(real_indices.shape[0])
+            remap = torch.zeros(nm.shape[0], dtype=torch.long, device=ei_raw.device)
+            remap[real_indices] = torch.arange(real_indices.shape[0], device=ei_raw.device)
             data_list.append(
                 Data(x=x_real, edge_index=remap[ei_raw], edge_attr=ea_real)
             )

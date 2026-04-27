@@ -63,6 +63,7 @@ from stable_baselines3.common.callbacks import (
     CheckpointCallback,
 )
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 from quetsal.src.agent.ppo_agent import make_ppo_agent, save_agent
 from quetsal.training.callbacks import (
@@ -224,6 +225,14 @@ def _parse_args() -> argparse.Namespace:
         help="Build (or verify) the master pool at --master-pool-path and exit "
         "without training. Requires --master-pool-path.",
     )
+    p.add_argument(
+        "--n-envs",
+        type=int,
+        default=1,
+        help="Number of parallel training environments via SubprocVecEnv. "
+        "Default 1 = single env. Set to (physical_cores - 1) for max speedup. "
+        "Not compatible with --curriculum.",
+    )
 
     p.add_argument(
         "--families",
@@ -294,6 +303,7 @@ def main() -> None:
         "hidden_dim": args.hidden_dim,
         "num_layers": args.num_layers,
         "latent_dim": args.latent_dim,
+        "n_envs": args.n_envs,
     }
     print(f"[quetsal] hparams: {json.dumps(_hparams)}")
 
@@ -405,10 +415,54 @@ def main() -> None:
         print(f"[quetsal] {len(circuits)} circuits ready in {time.time() - t0:.1f}s")
 
     # ── 2. Instantiate environment ────────────────────────────────────────────
-    env = PassManagerEnv(
-        circuits=circuits,
-        max_steps=MAX_STEPS_PER_EPISODE,
-    )
+    n_envs = args.n_envs
+    if n_envs > 1 and args.curriculum:
+        print(
+            "[quetsal] WARNING: --curriculum is not compatible with --n-envs > 1. "
+            "Falling back to n_envs=1."
+        )
+        n_envs = 1
+
+    # EvalCallback/CheckpointCallback fire every eval_freq *calls* (1 call = n_envs steps),
+    # so divide checkpoint_freq by n_envs to maintain the same total-step interval.
+    _ckpt_freq_calls = max(1, args.checkpoint_freq // n_envs)
+    # n_steps per env: keep total rollout size (n_steps × n_envs) constant.
+    _n_steps_per_env = max(64, args.n_steps // n_envs)
+    _total_rollout = _n_steps_per_env * n_envs
+    _batch_size = args.batch_size if args.batch_size is not None else args.n_steps
+    # batch_size must not exceed the total rollout buffer (n_steps_per_env × n_envs).
+    _batch_size = min(_batch_size, _total_rollout)
+
+    if n_envs > 1:
+        _all_circuits = circuits
+
+        def _make_env(seed_offset: int):
+            def _init():
+                import random
+
+                shuffled = list(_all_circuits)
+                random.Random(args.circuit_seed + seed_offset).shuffle(shuffled)
+                return Monitor(
+                    PassManagerEnv(circuits=shuffled, max_steps=MAX_STEPS_PER_EPISODE)
+                )
+
+            return _init
+
+        _env_fns = [_make_env(i) for i in range(n_envs)]
+        try:
+            env = SubprocVecEnv(_env_fns)
+            print(
+                f"[quetsal] SubprocVecEnv: {n_envs} workers, "
+                f"{_n_steps_per_env} steps/env/rollout "
+                f"({_n_steps_per_env * n_envs} total/rollout)"
+            )
+        except Exception as _e:
+            print(f"[quetsal] SubprocVecEnv failed ({_e}), falling back to DummyVecEnv")
+            env = DummyVecEnv(_env_fns)
+    else:
+        env = Monitor(
+            PassManagerEnv(circuits=circuits, max_steps=MAX_STEPS_PER_EPISODE)
+        )
 
     # ── 3. Build PPO agent ────────────────────────────────────────────────────
     # Curriculum stage 1 overrides ent_coef to the stage-specific value
@@ -416,8 +470,8 @@ def main() -> None:
 
     model = make_ppo_agent(
         env=env,
-        n_steps=args.n_steps,
-        batch_size=args.batch_size if args.batch_size is not None else args.n_steps,
+        n_steps=_n_steps_per_env,
+        batch_size=_batch_size,
         n_epochs=args.n_epochs,
         gamma=args.gamma,
         learning_rate=args.lr,
@@ -449,7 +503,7 @@ def main() -> None:
 
     # ── 4. Callbacks ──────────────────────────────────────────────────────────
     checkpoint_cb = CheckpointCallback(
-        save_freq=args.checkpoint_freq,
+        save_freq=_ckpt_freq_calls,
         save_path=str(ckpt_dir / "checkpoints"),
         name_prefix="quetsal",
         verbose=1,
@@ -518,7 +572,7 @@ def main() -> None:
         eval_env=eval_env,
         best_model_save_path=str(best_model_dir),
         log_path=str(ckpt_dir / "logs" / f"eval_{timestamp}"),
-        eval_freq=args.checkpoint_freq,
+        eval_freq=_ckpt_freq_calls,
         n_eval_episodes=len(eval_circuits),
         deterministic=True,
         verbose=1,
@@ -538,7 +592,7 @@ def main() -> None:
         _es_curriculum_cb = None  # filled in below if --curriculum is also set
         early_stopping_cb = EarlyStoppingCallback(
             eval_cb=eval_cb,
-            eval_freq=args.checkpoint_freq,
+            eval_freq=_ckpt_freq_calls,
             patience=args.early_stopping_patience,
             min_delta=args.early_stopping_min_delta,
             curriculum_cb=_es_curriculum_cb,  # updated below if curriculum enabled
@@ -570,7 +624,7 @@ def main() -> None:
             curriculum=curriculum_ctrl,
             eval_cb=eval_cb,
             eval_log_wrapper=_pass_log_wrapper,
-            eval_freq=args.checkpoint_freq,
+            eval_freq=_ckpt_freq_calls,
             verbose=args.verbose,
         )
         cb_list.append(curriculum_cb)

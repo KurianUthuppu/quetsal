@@ -109,10 +109,16 @@ class GNNFeaturesExtractor(BaseFeaturesExtractor):
         """
         batch = _obs_to_pyg_batch(observations)
 
-        x = batch.x.float()
-        edge_index = batch.edge_index.long()
-        edge_attr = batch.edge_attr.float()
-        batch_vec = batch.batch  # node → graph index mapping
+        # Move all graph tensors to the model's device.
+        # _obs_to_pyg_batch may produce CPU tensors in edge cases (e.g. the
+        # zero-obs empty-graph dummy node, or the terminal-obs bootstrap path
+        # in predict_values).  Pinning here ensures the GNN always gets
+        # tensors on the correct device regardless of how the batch was built.
+        device = next(self.parameters()).device
+        x = batch.x.float().to(device)
+        edge_index = batch.edge_index.long().to(device)
+        edge_attr = batch.edge_attr.float().to(device)
+        batch_vec = batch.batch.to(device)
 
         # Message passing with skip connections (residual additions).
         # Layer 0: input is NODE_DIM=10, output is hidden_dim=64 — project

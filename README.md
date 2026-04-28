@@ -82,32 +82,31 @@ optimized_circuit = pm.run(raw_circuit)
 
 ## Current Results
 
-Benchmark: model `20260422` (300k steps, non-parametric families), evaluated on 460 circuits
-(100 Clifford-SU4 + 77 Clifford-SU4-SU8 + 100 PauliGadget + 83 QV + 100 RandomClifford),
-3–8 qubits, Heron r2 basis.
+Benchmark: 300K steps, 4-action ablation, 4 non-parametric families, evaluated on 316 circuits
+(100 Clifford-SU4 + 57 Clifford-SU4-SU8 + 59 QV + 100 RandomClifford),
+3–10 qubits, Heron r2 basis.
 All optimizers receive the **same pre-transpiled input** (post layout+routing+translation, pre-optimization).
 
 ### Mean 2q gate reduction (%)
 
-| Optimizer   | Clifford-SU4 | Clifford-SU4-SU8 | PauliGadget |       QV | RandomClifford | **Total (460)** |
-| :---------- | -----------: | ---------------: | ----------: | -------: | -------------: | --------------: |
-| opt_level=1 |          0.0 |              0.0 |         0.0 |      0.0 |            0.0 |             0.0 |
-| opt_level=2 |         17.2 |             11.7 |        63.3 |     16.4 |            5.1 |            23.5 |
-| opt_level=3 |         17.3 |             11.7 |        63.3 |     16.4 |            5.1 |            23.5 |
-| **Quetsal** |     **21.9** |         **16.5** |    **63.3** | **22.5** |       **21.5** |        **30.1** |
+| Optimizer   | Clifford-SU4 | Clifford-SU4-SU8 |       QV | RandomClifford | **Total (316)** |
+| :---------- | -----------: | ---------------: | -------: | -------------: | --------------: |
+| opt_level=0 |          0.0 |              0.0 |      0.0 |            0.0 |             0.0 |
+| opt_level=1 |         13.9 |             10.9 |     14.8 |            6.5 |            11.2 |
+| opt_level=2 |         13.9 |             10.9 |     14.8 |            6.5 |            11.2 |
+| **Quetsal** |     **22.9** |         **15.3** | **27.5** |       **22.2** |        **22.2** |
 
-**+6.6pp over opt_level=3** across all families (best: +16.4pp on RandomClifford, +6.1pp on QV).
-PauliGadget at ceiling — opt_level=2 already achieves full reduction; no headroom for RL.
+**~2× opt_level=1/2** (+11.0pp overall). Best gains: RandomClifford +15.7pp, QV +12.6pp, Clifford-SU4 +9.1pp.
 
 ### Mean depth change (%) _(negative = better)_
 
-| Optimizer   | Clifford-SU4 | Clifford-SU4-SU8 | PauliGadget |        QV | RandomClifford |     Total |
-| :---------- | -----------: | ---------------: | ----------: | --------: | -------------: | --------: |
-| opt_level=3 |        −70.8 |            −59.0 |       −67.2 |     −70.3 |          −37.2 |     −60.6 |
-| **Quetsal** |    **−71.2** |            −58.4 |       −57.7 | **−72.6** |      **−44.6** | **−60.6** |
+| Optimizer   | Clifford-SU4 | Clifford-SU4-SU8 |        QV | RandomClifford | Total |
+| :---------- | -----------: | ---------------: | --------: | -------------: | ----: |
+| opt_level=2 |        −68.8 |            −58.3 |     −70.1 |          −35.9 | −56.7 |
+| **Quetsal** |    **−71.0** |            −57.3 | **−74.1** |          −34.5 | −57.6 |
 
-Depth impact is neutral overall (−60.6% both). Quetsal improves depth on QV (−2.3pp) and
-RandomClifford (−7.4pp); PauliGadget depth increases slightly (+9.5pp) but 2q reduction is unchanged.
+Depth impact is neutral overall (−57.6% vs −56.7%). Quetsal improves depth on Clifford-SU4 (−2.2pp)
+and QV (−4.0pp); RandomClifford depth increases slightly (+1.4pp).
 
 ---
 

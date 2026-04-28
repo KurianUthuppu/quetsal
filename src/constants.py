@@ -166,9 +166,9 @@ TRAINING_MODE_ARGS: dict[int, dict] = {
     1: {  # FULL — proper training
         "count_per_family": 500,
         "total_steps": 300_000,
-        "n_steps": 128,
-        "batch_size": 64,
-        "n_epochs": 3,
+        "n_steps": 512,
+        "batch_size": 128,
+        "n_epochs": 5,
         "checkpoint_freq": 10_000,
     },
 }

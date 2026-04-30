@@ -95,6 +95,7 @@ class PassManagerEnv(gym.Env):
         max_steps: int = MAX_STEPS_PER_EPISODE,
         basis_gates: list[str] | None = None,
         donothing_early_penalty: float = 0.0,
+        step_penalty: float = STEP_PENALTY,
     ):
         """
         Parameters
@@ -107,6 +108,9 @@ class PassManagerEnv(gym.Env):
         donothing_early_penalty : stage 3 curriculum penalty applied when the agent
                                   selects DoNothing before MIN_STEPS_BEFORE_STOP.
                                   0.0 (default) disables the penalty.
+        step_penalty            : fixed cost per non-DoNothing action; set higher
+                                  in stage 2 to tighten early-termination pressure.
+                                  Defaults to STEP_PENALTY from constants.py.
         """
         super().__init__()
 
@@ -114,6 +118,7 @@ class PassManagerEnv(gym.Env):
         self.max_steps = max_steps
         self.basis_gates = basis_gates or HERON_R2_BASIS
         self.donothing_early_penalty = donothing_early_penalty
+        self.step_penalty = step_penalty
 
         # -- Action space: 7 discrete actions (6 passes + DoNothing) -----------
         # Indices 0-5: real passes; index 6: DoNothing (terminate).
@@ -418,7 +423,7 @@ class PassManagerEnv(gym.Env):
 
         # Step penalty: small fixed cost per pass applied.
         # Incentivises the agent to stop unless the pass genuinely reduces 2q gates.
-        reward = step_reduction + depth_penalty - STEP_PENALTY
+        reward = step_reduction + depth_penalty - self.step_penalty
         self._prev_2q = current_2q
         self._prev_depth = current_depth
 

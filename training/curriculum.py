@@ -225,10 +225,12 @@ class CurriculumController:
         # Rebuild circuit pool with stage 2 blend (start at param_start_mix)
         self._rebuild_stage2_circuits()
 
-        # Update hyperparameters — only ent_coef changes at stage 1→2.
+        # Update hyperparameters — ent_coef and step_penalty change at stage 1→2.
         # LR is unchanged (stage 3 is the only stage that lowers LR to 1e-4).
         cfg = CURRICULUM_STAGES[2]
         self.model.ent_coef = float(cfg["ent_coef_start"])
+        self.train_env.step_penalty = float(cfg["step_penalty"])
+        self.eval_env_inner.step_penalty = float(cfg["step_penalty"])
 
         if self.verbose >= 1:
             print(
@@ -253,19 +255,18 @@ class CurriculumController:
         eval_total = max(14, int(total * 0.20))
 
         if self.master_pool is not None:
-            from quetsal.training.circuit_cache import sample_pool as _sp
-
-            _ALL_FAMILIES = cfg["families"]
-            circuits = _sp(
+            circuits = sample_weighted_pool(
                 self.master_pool,
-                families=_ALL_FAMILIES,
-                count_per_family=self.count_per_family,
+                families=cfg["families"],
+                family_weights=cfg["family_weights"],
+                total_count=total,
                 rng_seed=self.circuit_seed + 300,
             )
-            eval_circuits = _sp(
+            eval_circuits = sample_weighted_pool(
                 self.master_pool,
-                families=_ALL_FAMILIES,
-                count_per_family=max(2, int(self.count_per_family * 0.20)),
+                families=cfg["families"],
+                family_weights=cfg["family_weights"],
+                total_count=eval_total,
                 rng_seed=self.circuit_seed + 999 + 300,
             )
         else:

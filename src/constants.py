@@ -243,7 +243,7 @@ CURRICULUM_STAGES: dict[int, dict] = {
             "clifford_su4_su8": 0.25,
             "random_clifford": 0.20,
         },
-        "max_steps": 150_000,
+        "max_steps": 200_000,
         "ent_coef": 0.05,
         "promotion": {
             "eval_mean_reward_min": 0.25,
@@ -276,7 +276,7 @@ CURRICULUM_STAGES: dict[int, dict] = {
         "param_start_mix": 0.10,
         "param_blend_step": 0.05,
         "param_max_mix": 0.20,
-        "max_steps": 100_000,
+        "max_steps": 200_000,
         "ent_coef_start": 0.04,
         "ent_coef_end": 0.02,
         "step_penalty": 0.003,
@@ -293,7 +293,7 @@ CURRICULUM_STAGES: dict[int, dict] = {
     3: {
         "families": _ALL_FAMILIES,
         "family_weights": _STAGE3_WEIGHTS,
-        "max_steps": 50_000,  # balanced fine-tune  — total 300K
+        "max_steps": 100_000,  # balanced fine-tune  — total 500K
         "lr": 1e-4,
         "ent_coef": 0.01,
         "clip_range": 0.1,

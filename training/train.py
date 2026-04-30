@@ -460,9 +460,8 @@ def main() -> None:
             print(f"[quetsal] SubprocVecEnv failed ({_e}), falling back to DummyVecEnv")
             env = DummyVecEnv(_env_fns)
     else:
-        env = Monitor(
-            PassManagerEnv(circuits=circuits, max_steps=MAX_STEPS_PER_EPISODE)
-        )
+        _inner_train_env = PassManagerEnv(circuits=circuits, max_steps=MAX_STEPS_PER_EPISODE)
+        env = Monitor(_inner_train_env)
 
     # ── 3. Build PPO agent ────────────────────────────────────────────────────
     # Curriculum stage 1 overrides ent_coef to the stage-specific value
@@ -609,7 +608,7 @@ def main() -> None:
     if args.curriculum:
         curriculum_ctrl = CurriculumController(
             model=model,
-            train_env=env,
+            train_env=_inner_train_env,
             eval_env_inner=_inner_eval_env,
             n_qubits_range=(args.min_qubits, args.max_qubits),
             count_per_family=args.count_per_family,

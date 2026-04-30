@@ -33,7 +33,6 @@ from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 
 from quetsal.src.constants import ACTION_LABELS, CURRICULUM_STAGES
 
-
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
 _FAMILIES_ORDER = [
@@ -167,6 +166,10 @@ class PassLogWrapper(gym.Wrapper):
         super().__init__(env)
         self._counts: dict[str, Counter] = defaultdict(Counter)
         self._episodes: dict[str, int] = defaultdict(int)
+        # DoNothing counts after flush() has already zeroed the live counters.
+        # Snapshot preserved after each flush so CurriculumCallback can read
+        self._last_counts: dict[str, Counter] = defaultdict(Counter)
+        self._last_episodes: dict[str, int] = defaultdict(int)
 
     def step(self, action):
         obs, reward, terminated, truncated, info = self.env.step(action)
@@ -179,6 +182,8 @@ class PassLogWrapper(gym.Wrapper):
         return obs, reward, terminated, truncated, info
 
     def flush(self, step: int, save_path: Path, verbose: int) -> None:
+        self._last_counts = dict(self._counts)
+        self._last_episodes = dict(self._episodes)
         if verbose >= 1:
             _print_table(self._counts, self._episodes, step, "eval")
         _write_csv(self._counts, self._episodes, step, "eval", save_path)
@@ -320,13 +325,13 @@ class CurriculumCallback(BaseCallback):
             if eval_mean_reward is None:
                 return True  # eval hasn't run yet
 
-            # DoNothing per episode: read from the PassLogWrapper's latest counts
-            # (wrapper resets after each flush, so this reflects the latest eval round)
+            # DoNothing per episode: read from the snapshot saved before flush()
+            # zeroed the live counters (eval_cb fires before curriculum_cb).
             donothing_label = "DoNothing"
-            total_episodes = sum(self.eval_log_wrapper._episodes.values())
+            total_episodes = sum(self.eval_log_wrapper._last_episodes.values())
             donothing_total = sum(
-                self.eval_log_wrapper._counts[f].get(donothing_label, 0)
-                for f in self.eval_log_wrapper._counts
+                self.eval_log_wrapper._last_counts[f].get(donothing_label, 0)
+                for f in self.eval_log_wrapper._last_counts
             )
             donothing_per_ep = donothing_total / max(total_episodes, 1)
 

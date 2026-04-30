@@ -119,7 +119,7 @@ def _run_opt_level(qc, opt_level: int, seed: int = 42) -> tuple["QuantumCircuit"
     pm.translation = PassManager()
     pm.scheduling = PassManager()
     t0 = time.time()
-    out = pm.run(qc)
+    out = pm.run(qc.copy())  # copy: Qiskit 2.x pm.run() modifies the circuit in-place
     return out, time.time() - t0
 
 

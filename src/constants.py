@@ -216,11 +216,11 @@ _ALL_FAMILIES = [
 # Stage 3 weights: equal within groups — non-param 17% each (85% total),
 # param 5% each (15% total).  Continuous with stage 2 which ends at 20% param.
 _STAGE3_WEIGHTS = {
-    "qv": 0.17,
-    "clifford_su4_su8": 0.17,
-    "clifford_su4": 0.17,
-    "iqp": 0.17,
-    "random_clifford": 0.17,
+    "qv": 0.20,
+    "clifford_su4_su8": 0.20,
+    "clifford_su4": 0.20,
+    "iqp": 0.05,
+    "random_clifford": 0.20,
     "qaoa": 0.05,
     "efficient_su2": 0.05,
     "real_amplitudes": 0.05,
@@ -269,16 +269,15 @@ CURRICULUM_STAGES: dict[int, dict] = {
             "qv",
             "clifford_su4",
             "clifford_su4_su8",
-            "iqp",
             "random_clifford",
         ],
-        "param_families": ["qaoa", "efficient_su2"],
+        "param_families": ["iqp", "qaoa", "efficient_su2"],
         "param_start_mix": 0.10,
         "param_blend_step": 0.05,
         "param_max_mix": 0.20,
         "max_steps": 200_000,
         "ent_coef_start": 0.04,
-        "ent_coef_end": 0.02,
+        "ent_coef_end": 0.03,
         "step_penalty": 0.003,
         "promotion": {
             "eval_mean_reward_min": 0.10,  # safety floor only — ensures agent isn't broken;
@@ -295,7 +294,7 @@ CURRICULUM_STAGES: dict[int, dict] = {
         "family_weights": _STAGE3_WEIGHTS,
         "max_steps": 100_000,  # balanced fine-tune  — total 500K
         "lr": 1e-4,
-        "ent_coef": 0.01,
+        "ent_coef": 0.02,
         "clip_range": 0.1,
         "donothing_early_penalty": 0.05,  # penalise DoNothing before MIN_STEPS_BEFORE_STOP
     },

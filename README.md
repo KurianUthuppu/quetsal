@@ -54,7 +54,7 @@ DAGCircuit → GINConv Graph Encoder → PPO Policy (SB3) → Pass Selection Act
 ## Quick Start
 
 ```bash
-# Train (mode 1 = full 300k steps)
+# Train (mode 1 = full 500k steps)
 python -m quetsal.training.train --mode 1
 
 # Benchmark against Qiskit baselines
@@ -72,7 +72,7 @@ Use via plugin (after `pip install -e quetsal/`):
 from quetsal.src.plugin.quetsal_plugin import QuetsalPlugin
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
-plugin = QuetsalPlugin(model_path="runs/quetsal/final_20260417_215040.zip")
+plugin = QuetsalPlugin(model_path="runs/quetsal/best_model/20260429_042101/best_model.zip")
 pm = generate_preset_pass_manager(optimization_level=1, basis_gates=..., coupling_map=cm)
 pm.optimization = plugin.pass_manager(pass_manager_config=None)
 optimized_circuit = pm.run(raw_circuit)
@@ -82,31 +82,33 @@ optimized_circuit = pm.run(raw_circuit)
 
 ## Current Results
 
-Benchmark: 300K steps, 4-action ablation, 4 non-parametric families, evaluated on 316 circuits
+Benchmark: 500K training steps, 4 non-parametric families, evaluated on 316 circuits
 (100 Clifford-SU4 + 57 Clifford-SU4-SU8 + 59 QV + 100 RandomClifford),
-3–10 qubits, Heron r2 basis.
-All optimizers receive the **same pre-transpiled input** (post layout+routing+translation, pre-optimization).
+3–10 qubits, Heron r2 basis. All optimizers receive the **same pre-transpiled input** (post layout+routing+translation, pre-optimization).
 
 ### Mean 2q gate reduction (%)
 
 | Optimizer   | Clifford-SU4 | Clifford-SU4-SU8 |       QV | RandomClifford | **Total (316)** |
 | :---------- | -----------: | ---------------: | -------: | -------------: | --------------: |
-| opt_level=0 |          0.0 |              0.0 |      0.0 |            0.0 |             0.0 |
-| opt_level=1 |         13.9 |             10.9 |     14.8 |            6.5 |            11.2 |
+| opt_level=1 |          0.0 |              0.0 |      0.0 |            0.0 |             0.0 |
 | opt_level=2 |         13.9 |             10.9 |     14.8 |            6.5 |            11.2 |
-| **Quetsal** |     **22.9** |         **15.3** | **27.5** |       **22.2** |        **22.2** |
+| opt_level=3 |         13.9 |             10.9 |     14.8 |            6.5 |            11.2 |
+| **Quetsal** |     **23.7** |         **14.1** | **26.3** |       **21.4** |        **21.7** |
 
-**~2× opt_level=1/2** (+11.0pp overall). Best gains: RandomClifford +15.7pp, QV +12.6pp, Clifford-SU4 +9.1pp.
+**~2× opt_level=2/3** (+10.5pp overall). Best gains: RandomClifford +14.9pp, QV +11.5pp, Clifford-SU4 +9.8pp.
 
-### Mean depth change (%) _(negative = better)_
+### Mean depth reduction (%)
 
-| Optimizer   | Clifford-SU4 | Clifford-SU4-SU8 |        QV | RandomClifford | Total |
-| :---------- | -----------: | ---------------: | --------: | -------------: | ----: |
-| opt_level=2 |        −68.8 |            −58.3 |     −70.1 |          −35.9 | −56.7 |
-| **Quetsal** |    **−71.0** |            −57.3 | **−74.1** |          −34.5 | −57.6 |
+| Optimizer   | Clifford-SU4 | Clifford-SU4-SU8 |       QV | RandomClifford | Total |
+| :---------- | -----------: | ---------------: | -------: | -------------: | ----: |
+| opt_level=1 |         64.1 |             52.8 |     65.6 |           27.7 |  50.8 |
+| opt_level=2 |         68.8 |             58.3 |     70.1 |           35.9 |  56.7 |
+| opt_level=3 |         68.8 |             58.3 |     70.1 |           35.9 |  56.7 |
+| **Quetsal** |     **71.2** |             57.9 | **74.9** |        **38.4** | **59.1** |
 
-Depth impact is neutral overall (−57.6% vs −56.7%). Quetsal improves depth on Clifford-SU4 (−2.2pp)
-and QV (−4.0pp); RandomClifford depth increases slightly (+1.4pp).
+Quetsal reduces depth further overall (59.1% vs 56.7%), with the largest gains on QV (+4.8pp) and Clifford-SU4 (+2.4pp).
+
+> **Inference cost:** Quetsal averages ~0.175 s/circuit vs ~0.010 s for opt_level=3 (~18× slower) — the expected trade-off for a learned pass rollout.
 
 ---
 

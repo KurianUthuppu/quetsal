@@ -9,7 +9,7 @@
 #
 # Stages (defined in constants.CURRICULUM_STAGES):
 #   1 — Foundation:        4 non-param families (QV/Clifford-SU4/Clifford-SU4-SU8/RandomClifford)
-#   2 — Parametric blend:  adds IQP (non-param) + QAOA/EfficientSU2 (param, 10%→20% mix)
+#   2 — Parametric blend:  adds IQP + QAOA/EfficientSU2 as incompressible group (10%→20% mix)
 #   3 — Balanced fine-tune: all 8 families; non-param 17% each, param 5% each; RealAmplitudes introduced here
 #
 # Used only when train.py is invoked with --curriculum.

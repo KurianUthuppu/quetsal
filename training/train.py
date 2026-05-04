@@ -80,6 +80,7 @@ from quetsal.src.constants import (
     MAX_STEPS_PER_EPISODE,
     TRAINING_MODE,
     TRAINING_MODE_ARGS,
+    _STAGE3_WEIGHTS,
 )
 from quetsal.src.environment.circuits import generate_training_circuits
 from quetsal.src.environment.pass_env import PassManagerEnv
@@ -247,6 +248,14 @@ def _parse_args() -> argparse.Namespace:
             "Default: all 8 families. Not compatible with --curriculum."
         ),
     )
+    p.add_argument(
+        "--weighted",
+        action="store_true",
+        default=False,
+        help="Sample training circuits using Stage 3 weights from constants.py "
+        "(non-param families 20%% each, param families 5%% each). "
+        "Not compatible with --curriculum.",
+    )
 
     args = p.parse_args()
 
@@ -304,6 +313,8 @@ def main() -> None:
         "num_layers": args.num_layers,
         "latent_dim": args.latent_dim,
         "n_envs": args.n_envs,
+        "weighted": args.weighted,
+        "curriculum": args.curriculum,
     }
     print(f"[quetsal] hparams: {json.dumps(_hparams)}")
 
@@ -376,6 +387,16 @@ def main() -> None:
                 total_count=_s1_total,
                 rng_seed=args.circuit_seed,
             )
+        elif args.weighted:
+            _ALL_FAMILIES = list(_STAGE3_WEIGHTS.keys())
+            _total_count = args.count_per_family * len(_ALL_FAMILIES)
+            circuits = sample_weighted_pool(
+                _master_pool,
+                families=_ALL_FAMILIES,
+                family_weights=_STAGE3_WEIGHTS,
+                total_count=_total_count,
+                rng_seed=args.circuit_seed,
+            )
         else:
             _ALL_FAMILIES = (
                 args.families if args.families else list(_master_pool.keys())
@@ -400,6 +421,18 @@ def main() -> None:
                 families=_s1["families"],
                 family_weights=_s1["family_weights"],
                 total_count=_s1_total,
+                n_qubits_range=(args.min_qubits, args.max_qubits),
+                seed=args.circuit_seed,
+                basis_gates=HERON_R2_BASIS,
+            )
+        elif args.weighted:
+            from quetsal.src.environment.circuits import generate_weighted_circuits
+
+            _total_count = args.count_per_family * len(_STAGE3_WEIGHTS)
+            circuits = generate_weighted_circuits(
+                families=list(_STAGE3_WEIGHTS.keys()),
+                family_weights=_STAGE3_WEIGHTS,
+                total_count=_total_count,
                 n_qubits_range=(args.min_qubits, args.max_qubits),
                 seed=args.circuit_seed,
                 basis_gates=HERON_R2_BASIS,
@@ -522,6 +555,15 @@ def main() -> None:
                 total_count=_s1_eval_total,
                 rng_seed=args.circuit_seed + _EVAL_SEED_OFFSET,
             )
+        elif args.weighted:
+            _eval_total = len(_STAGE3_WEIGHTS) * _eval_count
+            eval_circuits = sample_weighted_pool(
+                _master_pool,
+                families=list(_STAGE3_WEIGHTS.keys()),
+                family_weights=_STAGE3_WEIGHTS,
+                total_count=_eval_total,
+                rng_seed=args.circuit_seed + _EVAL_SEED_OFFSET,
+            )
         else:
             _ALL_FAMILIES = (
                 args.families if args.families else list(_master_pool.keys())
@@ -545,6 +587,18 @@ def main() -> None:
                 seed=args.circuit_seed + _EVAL_SEED_OFFSET,
                 basis_gates=HERON_R2_BASIS,
             )
+        elif args.weighted:
+            from quetsal.src.environment.circuits import generate_weighted_circuits
+
+            _eval_total = len(_STAGE3_WEIGHTS) * _eval_count
+            eval_circuits = generate_weighted_circuits(
+                families=list(_STAGE3_WEIGHTS.keys()),
+                family_weights=_STAGE3_WEIGHTS,
+                total_count=_eval_total,
+                n_qubits_range=(args.min_qubits, args.max_qubits),
+                seed=args.circuit_seed + _EVAL_SEED_OFFSET,
+                basis_gates=HERON_R2_BASIS,
+            )
         else:
             eval_circuits = generate_training_circuits(
                 n_qubits_range=(args.min_qubits, args.max_qubits),
@@ -553,7 +607,11 @@ def main() -> None:
                 basis_gates=HERON_R2_BASIS,
                 families=args.families,
             )
-    _n_active_fam = len(args.families) if args.families else 8
+    _n_active_fam = (
+        len(args.families) if args.families
+        else len(_STAGE3_WEIGHTS) if args.weighted
+        else 8
+    )
     print(
         f"[quetsal] Eval pool: {len(eval_circuits)} circuits ({_eval_count}/family requested, {len(eval_circuits)//_n_active_fam} avg after filtering)"
     )

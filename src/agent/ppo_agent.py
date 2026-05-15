@@ -20,6 +20,7 @@ import gymnasium as gym
 from stable_baselines3 import PPO
 
 from quetsal.src.agent.gnn_policy import QuetsalGNNPolicy
+from quetsal.src.constants import GLOBAL_DIM
 
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
@@ -40,6 +41,7 @@ DEFAULT_MAX_GRAD_NORM = 0.5  # gradient clipping threshold
 DEFAULT_HIDDEN_DIM = 64
 DEFAULT_NUM_LAYERS = 3
 DEFAULT_LATENT_DIM = 64
+DEFAULT_GLOBAL_DIM = GLOBAL_DIM  # global feature vector size
 
 
 # ── Factory ───────────────────────────────────────────────────────────────────
@@ -60,6 +62,7 @@ def make_ppo_agent(
     hidden_dim: int = DEFAULT_HIDDEN_DIM,
     num_layers: int = DEFAULT_NUM_LAYERS,
     latent_dim: int = DEFAULT_LATENT_DIM,
+    global_dim: int = DEFAULT_GLOBAL_DIM,
     seed: int = 42,
     verbose: int = 1,
     device: str = "auto",
@@ -81,6 +84,7 @@ def make_ppo_agent(
     hidden_dim    : GINEConv MLP hidden width.
     num_layers    : number of GINEConv message-passing layers.
     latent_dim    : output size of the GNN encoder.
+    global_dim    : size of the global feature vector appended to GNN output.
     seed          : RNG seed for reproducibility.
     verbose       : SB3 verbosity level (0=silent, 1=info, 2=debug).
     device        : "auto" selects GPU if available, else CPU.
@@ -106,6 +110,7 @@ def make_ppo_agent(
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             latent_dim=latent_dim,
+            global_dim=global_dim,
         ),
         seed=seed,
         verbose=verbose,

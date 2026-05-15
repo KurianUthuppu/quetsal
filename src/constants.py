@@ -14,10 +14,13 @@ __all__ = [
     "SKIP_GATES",
     "DEPTH_PENALTY_WEIGHT",
     "TERMINAL_BONUS",
+    "TERMINAL_BONUS_SCALE",
+    "FAMILY_REDUCTION_CEILING",
     "STEP_PENALTY",
     "TRUNCATION_PENALTY",
     "MAX_NODES",
     "MAX_EDGES",
+    "GLOBAL_DIM",
     "MAX_STEPS_PER_EPISODE",
     "MIN_STEPS_BEFORE_STOP",
     "TRAINING_MODE",
@@ -68,6 +71,7 @@ NUM_ACTIONS: int = len(ACTION_LABELS)
 NUM_GATE_TYPES: int = 6  # one-hot length for gate vocabulary
 NODE_DIM: int = 10  # total node feature dimension
 EDGE_DIM: int = 6  # total edge feature dimension (src_role[3] + dst_role[3])
+GLOBAL_DIM: int = 4  # global feature vector: [step_frac, 2q_ratio, n_qubits_norm, depth_ratio]
 
 # Gate vocabulary — strictly Heron r2 native basis gates only.
 # A properly transpiled ISA circuit on any target backend will only contain
@@ -111,7 +115,22 @@ DEPTH_PENALTY_WEIGHT: float = (
 TRUNCATION_PENALTY: float = (
     0.05  # penalty when episode hits MAX_STEPS without DoNothing
 )
-TERMINAL_BONUS: float = 0.1  # Bonus when terminated using DoNothing
+TERMINAL_BONUS: float = 0.1  # Fixed base bonus when agent calls DoNothing
+TERMINAL_BONUS_SCALE: float = 0  # Scales the proportional part of the terminal bonus
+# Terminal reward = TERMINAL_BONUS + TERMINAL_BONUS_SCALE * min(final_reduction / ceiling, 1.0)
+# Normalising by the per-family ceiling converts absolute gate reduction into a relative
+# Ceilings derived from opt_level=3 benchmark runs; update after major circuit pool changes.
+FAMILY_REDUCTION_CEILING: dict[str, float] = {
+    "clifford_su4": 0.24,
+    "clifford_su4_su8": 0.19,
+    "qv": 0.28,
+    "random_clifford": 0.23,
+    "iqp": 0.02,
+    "qaoa": 0.01,
+    "efficient_su2": 0.01,
+    "real_amplitudes": 0.01,
+}
+
 STEP_PENALTY: float = 0.001  # small cost per non-DoNothing action; incentivises
 # the agent to stop unless a pass genuinely helps
 

@@ -39,7 +39,7 @@ from stable_baselines3.common.type_aliases import Schedule
 from torch_geometric.data import Batch, Data
 from torch_geometric.nn import GINEConv, global_mean_pool
 
-from quetsal.src.constants import EDGE_DIM, NODE_DIM
+from quetsal.src.constants import EDGE_DIM, GLOBAL_DIM, NODE_DIM
 
 
 # ── Feature extractor ─────────────────────────────────────────────────────────
@@ -66,9 +66,11 @@ class GNNFeaturesExtractor(BaseFeaturesExtractor):
         hidden_dim: int = 64,
         num_layers: int = 3,
         latent_dim: int = 64,
+        global_dim: int = GLOBAL_DIM,
     ) -> None:
-        # BaseFeaturesExtractor sets self._features_dim = latent_dim
-        super().__init__(observation_space, features_dim=latent_dim)
+        # features_dim = GNN latent + global feature vector appended in forward()
+        super().__init__(observation_space, features_dim=latent_dim + global_dim)
+        self._global_dim = global_dim
 
         self.convs = nn.ModuleList()
         in_dim = NODE_DIM
@@ -100,12 +102,12 @@ class GNNFeaturesExtractor(BaseFeaturesExtractor):
         """
         Parameters
         ----------
-        observations : dict with keys "x", "edge_index", "edge_attr"
+        observations : dict with keys "x", "edge_index", "edge_attr", "global_feat"
             Tensors as provided by SB3 from the rollout buffer.
 
         Returns
         -------
-        torch.Tensor of shape [batch_size, latent_dim]
+        torch.Tensor of shape [batch_size, latent_dim + global_dim]
         """
         batch = _obs_to_pyg_batch(observations)
 
@@ -131,7 +133,18 @@ class GNNFeaturesExtractor(BaseFeaturesExtractor):
         # Graph-level pooling: [total_nodes, hidden_dim] → [B, hidden_dim]
         x = global_mean_pool(x, batch_vec)
 
-        return self.output_proj(x)  # [B, latent_dim]
+        gnn_out = self.output_proj(x)  # [B, latent_dim]
+
+        # Global features: [step_frac, 2q_ratio, n_qubits_norm, depth_ratio]
+        # SB3 passes shape [global_dim] (single step) or [B, global_dim] (minibatch).
+        g = observations["global_feat"]
+        if not isinstance(g, torch.Tensor):
+            g = torch.as_tensor(g, dtype=torch.float)
+        g = g.float().to(device)
+        if g.dim() == 1:
+            g = g.unsqueeze(0)  # [1, global_dim]
+
+        return torch.cat([gnn_out, g], dim=-1)  # [B, latent_dim + global_dim]
 
 
 # ── Obs → PyG Batch conversion ────────────────────────────────────────────────
@@ -254,16 +267,18 @@ class QuetsalGNNPolicy(ActorCriticPolicy):
         hidden_dim: int = 64,
         num_layers: int = 3,
         latent_dim: int = 64,
+        global_dim: int = GLOBAL_DIM,
         **kwargs: Any,
     ) -> None:
         # Pass GNNFeaturesExtractor as the features extractor.
         # net_arch=[] tells SB3 not to add any extra MLP on top of our latent —
-        # the actor/critic heads are plain Linear layers over latent_dim.
+        # the actor/critic heads are plain Linear layers over latent_dim + global_dim.
         kwargs["features_extractor_class"] = GNNFeaturesExtractor
         kwargs["features_extractor_kwargs"] = dict(
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             latent_dim=latent_dim,
+            global_dim=global_dim,
         )
         kwargs.setdefault("net_arch", [])  # no extra MLP trunk
         kwargs.setdefault("share_features_extractor", True)  # one shared GNN trunk

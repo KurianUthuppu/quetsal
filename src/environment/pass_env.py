@@ -36,10 +36,13 @@ from quetsal.src.environment.pyzx_pass import PyzxFullReduce
 from quetsal.src.constants import (
     ACTION_LABELS,
     DEPTH_PENALTY_WEIGHT,
+    FAMILY_REDUCTION_CEILING,
     STEP_PENALTY,
     TERMINAL_BONUS,
+    TERMINAL_BONUS_SCALE,
     TRUNCATION_PENALTY,
     EDGE_DIM,
+    GLOBAL_DIM,
     HERON_R2_BASIS,
     MAX_EDGES,
     MAX_NODES,
@@ -50,7 +53,6 @@ from quetsal.src.constants import (
     SKIP_GATES,
 )
 from quetsal.src.encoder.dag_encoder import dag_to_pyg
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -142,6 +144,9 @@ class PassManagerEnv(gym.Env):
                 ),
                 "node_mask": spaces.Box(0, 1, shape=(MAX_NODES,), dtype=np.bool_),
                 "edge_mask": spaces.Box(0, 1, shape=(MAX_EDGES,), dtype=np.bool_),
+                "global_feat": spaces.Box(
+                    -np.inf, np.inf, shape=(GLOBAL_DIM,), dtype=np.float32
+                ),
             }
         )
 
@@ -249,12 +254,27 @@ class PassManagerEnv(gym.Env):
         edge_mask = np.zeros(MAX_EDGES, dtype=np.bool_)
         edge_mask[:e] = True
 
+        # Global features: episode-level scalars broadcast to the policy heads
+        current_2q = _count_2q(self._dag)
+        current_depth = self._dag.depth()
+        n_qubits = self._dag.num_qubits()
+        global_feat = np.array(
+            [
+                self._step_count / max(self.max_steps, 1),          # step_frac
+                current_2q / max(self._initial_2q, 1),              # 2q_ratio
+                np.tanh(n_qubits / 10.0),                           # n_qubits_norm
+                current_depth / max(self._initial_depth, 1),        # depth_ratio
+            ],
+            dtype=np.float32,
+        )
+
         return {
             "x": x_pad,
             "edge_index": ei_pad,
             "edge_attr": ea_pad,
             "node_mask": node_mask,
             "edge_mask": edge_mask,
+            "global_feat": global_feat,
         }
 
     def _zero_obs(self) -> dict[str, np.ndarray]:
@@ -265,6 +285,7 @@ class PassManagerEnv(gym.Env):
             "edge_attr": np.zeros((MAX_EDGES, EDGE_DIM), dtype=np.float32),
             "node_mask": np.zeros(MAX_NODES, dtype=np.bool_),
             "edge_mask": np.zeros(MAX_EDGES, dtype=np.bool_),
+            "global_feat": np.zeros(GLOBAL_DIM, dtype=np.float32),
         }
 
     def reset(
@@ -355,8 +376,18 @@ class PassManagerEnv(gym.Env):
         # This prevents the untrained policy from collapsing to ep_len=1.
         if action == NUM_ACTIONS - 1 and self._step_count >= MIN_STEPS_BEFORE_STOP:
             terminated = True
-            # Terminal bonus: fixed reward for choosing to stop at the right time.
-            reward = TERMINAL_BONUS
+            # Terminal reward: fixed base + proportional bonus normalised by the
+            # per-family achievable ceiling.  Converts absolute gate reduction into
+            # a relative score so the value function learns a consistent range
+            # (~0.1–0.6) regardless of how reducible the circuit family is.
+            final_reduction = (
+                (self._initial_2q - _count_2q(self._dag)) / self._initial_2q
+                if self._initial_2q > 0
+                else 0.0
+            )
+            ceiling = FAMILY_REDUCTION_CEILING.get(self._current_family, 1.0)
+            normalized = min(final_reduction / ceiling, 1.0)
+            reward = TERMINAL_BONUS + TERMINAL_BONUS_SCALE * normalized
             try:
                 obs = self._encode_observation()
             except _DagOverflowError:

@@ -36,6 +36,11 @@ from quetsal.src.environment.pyzx_pass import PyzxFullReduce
 from quetsal.src.constants import (
     ACTION_LABELS,
     DEPTH_PENALTY_WEIGHT,
+    DEPTH_PRIMARY_FAMILIES,
+    DEPTH_PRIMARY_STEP_2Q_WEIGHT,
+    DEPTH_PRIMARY_STEP_DEPTH_WEIGHT,
+    DEPTH_PRIMARY_TERMINAL_BONUS_SCALE,
+    FAMILY_DEPTH_CEILING,
     FAMILY_REDUCTION_CEILING,
     STEP_PENALTY,
     TERMINAL_BONUS,
@@ -380,14 +385,27 @@ class PassManagerEnv(gym.Env):
             # per-family achievable ceiling.  Converts absolute gate reduction into
             # a relative score so the value function learns a consistent range
             # (~0.1–0.6) regardless of how reducible the circuit family is.
-            final_reduction = (
+            final_2q_reduction = (
                 (self._initial_2q - _count_2q(self._dag)) / self._initial_2q
                 if self._initial_2q > 0
                 else 0.0
             )
-            ceiling = FAMILY_REDUCTION_CEILING.get(self._current_family, 1.0)
-            normalized = min(final_reduction / ceiling, 1.0)
-            reward = TERMINAL_BONUS + TERMINAL_BONUS_SCALE * normalized
+            if self._current_family in DEPTH_PRIMARY_FAMILIES:
+                final_depth = self._dag.depth()
+                depth_reduction = (
+                    max(0.0, self._initial_depth - final_depth)
+                    / max(self._initial_depth, 1)
+                )
+                ceiling = FAMILY_DEPTH_CEILING.get(self._current_family, 0.5)
+                normalized = min(depth_reduction / ceiling, 1.0)
+                reward = (
+                    TERMINAL_BONUS
+                    + DEPTH_PRIMARY_TERMINAL_BONUS_SCALE * normalized
+                )
+            else:
+                ceiling = FAMILY_REDUCTION_CEILING.get(self._current_family, 1.0)
+                normalized = min(final_2q_reduction / ceiling, 1.0)
+                reward = TERMINAL_BONUS + TERMINAL_BONUS_SCALE * normalized
             try:
                 obs = self._encode_observation()
             except _DagOverflowError:
@@ -443,18 +461,24 @@ class PassManagerEnv(gym.Env):
         else:
             step_reduction = 0.0
 
-        # Optional depth penalty: per-step depth change, normalized by initial depth.
-        # Mirrors step_reduction: (prev - current) / initial_2q for 2q gates.
-        # Positive depth_change = depth grew this step = penalty.
-        depth_penalty = 0.0
+        # Normalised depth reduction this step, mirroring step_reduction:
+        # positive when depth decreased, negative when depth grew.
         current_depth = self._dag.depth()
-        if DEPTH_PENALTY_WEIGHT > 0.0 and self._initial_depth > 0:
-            depth_change = (current_depth - self._prev_depth) / self._initial_depth
-            depth_penalty = -DEPTH_PENALTY_WEIGHT * depth_change
+        depth_step_reduction = 0.0
+        if self._initial_depth > 0:
+            depth_step_reduction = (self._prev_depth - current_depth) / self._initial_depth
+        depth_reward = DEPTH_PENALTY_WEIGHT * depth_step_reduction
 
-        # Step penalty: small fixed cost per pass applied.
-        # Incentivises the agent to stop unless the pass genuinely reduces 2q gates.
-        reward = step_reduction + depth_penalty - self.step_penalty
+        # Depth-primary families get immediate depth credit.  Non-parametric
+        # families keep the original 2Q-first reward plus depth-change penalty.
+        if self._current_family in DEPTH_PRIMARY_FAMILIES:
+            reward = (
+                DEPTH_PRIMARY_STEP_DEPTH_WEIGHT * depth_step_reduction
+                + DEPTH_PRIMARY_STEP_2Q_WEIGHT * step_reduction
+                - self.step_penalty
+            )
+        else:
+            reward = step_reduction + depth_reward - self.step_penalty
         self._prev_2q = current_2q
         self._prev_depth = current_depth
 

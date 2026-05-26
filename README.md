@@ -82,9 +82,9 @@ optimized_circuit = pm.run(raw_circuit)
 
 ## Current Results
 
-Benchmark: 500K training steps across all 8 circuit families (4 non-parametric + 4 parametric), evaluated on **716 circuits**
+Benchmark: fine-tuned Quetsal run evaluated on **716 circuits**
 (100 Clifford-SU4 + 57 Clifford-SU4-SU8 + 59 QV + 100 RandomClifford + 100 IQP + 100 EfficientSU2 + 100 QAOA + 100 RealAmplitudes),
-3–10 qubits, Heron r2 basis. All optimizers receive the **same pre-transpiled input** (post layout+routing+translation, pre-optimization).
+3-10 qubits, Heron r2 basis. All optimizers receive the **same pre-transpiled input** (post layout+routing+translation, pre-optimization).
 
 ### Non-parametric circuits — 2q gate reduction (%)
 
@@ -93,9 +93,9 @@ Benchmark: 500K training steps across all 8 circuit families (4 non-parametric +
 | opt_level=1 |          0.0 |              0.0 |      0.0 |            0.0 |            0.0 |
 | opt_level=2 |         13.9 |             10.9 |     14.8 |            6.5 |           11.2 |
 | opt_level=3 |         13.9 |             10.9 |     14.8 |            6.5 |           11.2 |
-| **Quetsal** |     **21.8** |         **15.5** | **28.1** |       **20.3** |       **21.3** |
+| **Quetsal** |     **23.9** |         **15.7** | **27.4** |       **21.8** |       **22.4** |
 
-**~2× opt_level=2/3** (+10.1pp overall). Best gains: QV +13.3pp, RandomClifford +13.8pp, Clifford-SU4 +7.9pp.
+**~2x opt_level=2/3** (+11.2pp overall). Best gains: RandomClifford +15.3pp, QV +12.6pp, Clifford-SU4 +10.1pp.
 
 ### Non-parametric circuits — depth reduction (%)
 
@@ -104,31 +104,40 @@ Benchmark: 500K training steps across all 8 circuit families (4 non-parametric +
 | opt_level=1 |         64.1 |             52.8 |     65.6 |           27.7 | 50.8 |
 | opt_level=2 |         68.8 |             58.3 |     70.1 |           35.9 | 56.7 |
 | opt_level=3 |         68.8 |             58.3 |     70.1 |           35.9 | 56.7 |
-| **Quetsal** |     **70.1** |         **57.9** | **75.4** |       **41.8** | **59.9** |
+| **Quetsal** |     **71.2** |         **57.4** | **75.0** |       **39.4** | **59.4** |
 
-Quetsal reduces depth further overall (59.9% vs 56.7%), with the largest gains on QV (+5.3pp) and RandomClifford (+5.9pp).
+Quetsal reduces depth further overall (59.4% vs 56.7%), with the largest gains on QV (+4.9pp), RandomClifford (+3.5pp), and Clifford-SU4 (+2.4pp). Clifford-SU4-SU8 remains close to Qiskit's opt_level=2/3 depth while improving 2q reduction.
 
-### Parametric circuits — Quetsal results
+### Parametric circuits — 2q gate reduction (%)
 
-Parametric families have near-zero 2q gate reduction — the agent correctly learns to terminate early on circuits where structural cancellation is not possible. Depth reduction for EfficientSU2 and RealAmplitudes comes from 1q gate chain optimisation.
+Parametric families have near-zero 2q gate reduction across Qiskit and Quetsal; the meaningful comparison is depth.
 
-| Family         | Count | 2q reduction | Depth change | Avg elapsed (s) |
-| :------------- | ----: | -----------: | -----------: | --------------: |
-| IQP            |   100 |         0.0% |        −3.5% |           0.072 |
-| EfficientSU2   |   100 |         0.0% |       −29.0% |           0.026 |
-| QAOA           |   100 |         0.0% |        +0.0% |           0.030 |
-| RealAmplitudes |   100 |         0.0% |       −23.2% |           0.023 |
+| Optimizer   |  IQP | EfficientSU2 | QAOA | RealAmplitudes | Mean |
+| :---------- | ---: | -----------: | ---: | -------------: | ---: |
+| opt_level=1 |  0.0 |          0.0 |  0.0 |            0.0 |  0.0 |
+| opt_level=2 |  0.0 |          0.0 |  0.0 |            0.0 |  0.0 |
+| opt_level=3 |  0.0 |          0.0 |  0.0 |            0.0 |  0.0 |
+| **Quetsal** |  0.0 |          0.0 |  0.0 |            0.0 |  0.0 |
+
+### Parametric circuits — depth reduction (%)
+
+| Optimizer   |  IQP | EfficientSU2 | QAOA | RealAmplitudes | Mean |
+| :---------- | ---: | -----------: | ---: | -------------: | ---: |
+| opt_level=1 | 11.7 |         29.0 |  2.0 |           23.2 | 16.5 |
+| opt_level=2 | 11.7 |         48.5 |  2.0 |           45.7 | 27.0 |
+| opt_level=3 | 11.7 |         48.5 |  2.0 |           45.7 | 27.0 |
+| **Quetsal** | 11.7 |         29.0 |  2.0 |           23.2 | 16.5 |
+
+Quetsal currently matches opt_level=1 depth behaviour on EfficientSU2 and RealAmplitudes, while opt_level=2/3 still achieve substantially deeper reductions on those two ansatz families. This is the main remaining optimization target.
 
 ### Overall (716 circuits, all families)
 
 | Metric             | Value  |
 | :----------------- | -----: |
-| Mean 2q reduction  |   9.4% |
-| Mean depth change  | −34.2% |
+| Mean 2q reduction  |   9.9% |
+| Mean depth change  | -35.4% |
 
-The 9.4% overall 2q figure is diluted by the four parametric families (400 circuits, ~0% reduction each). On the 316 non-parametric circuits the mean is **21.3%**.
-
-> **Inference cost:** ~0.13–0.33 s/circuit for non-parametric families; ~0.02–0.07 s/circuit for parametric (agent exits after minimal steps).
+The 9.9% overall 2q figure is diluted by the four parametric families (400 circuits, ~0% reduction each). On the 316 non-parametric circuits the mean is **22.4%**.
 
 ---
 

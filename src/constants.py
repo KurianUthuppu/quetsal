@@ -15,7 +15,12 @@ __all__ = [
     "DEPTH_PENALTY_WEIGHT",
     "TERMINAL_BONUS",
     "TERMINAL_BONUS_SCALE",
+    "DEPTH_PRIMARY_FAMILIES",
+    "FAMILY_DEPTH_CEILING",
     "FAMILY_REDUCTION_CEILING",
+    "DEPTH_PRIMARY_STEP_DEPTH_WEIGHT",
+    "DEPTH_PRIMARY_STEP_2Q_WEIGHT",
+    "DEPTH_PRIMARY_TERMINAL_BONUS_SCALE",
     "STEP_PENALTY",
     "TRUNCATION_PENALTY",
     "MAX_NODES",
@@ -71,7 +76,9 @@ NUM_ACTIONS: int = len(ACTION_LABELS)
 NUM_GATE_TYPES: int = 6  # one-hot length for gate vocabulary
 NODE_DIM: int = 10  # total node feature dimension
 EDGE_DIM: int = 6  # total edge feature dimension (src_role[3] + dst_role[3])
-GLOBAL_DIM: int = 4  # global feature vector: [step_frac, 2q_ratio, n_qubits_norm, depth_ratio]
+GLOBAL_DIM: int = (
+    4  # global feature vector: [step_frac, 2q_ratio, n_qubits_norm, depth_ratio]
+)
 
 # Gate vocabulary — strictly Heron r2 native basis gates only.
 # A properly transpiled ISA circuit on any target backend will only contain
@@ -116,7 +123,7 @@ TRUNCATION_PENALTY: float = (
     0.05  # penalty when episode hits MAX_STEPS without DoNothing
 )
 TERMINAL_BONUS: float = 0.1  # Fixed base bonus when agent calls DoNothing
-TERMINAL_BONUS_SCALE: float = 0  # Scales the proportional part of the terminal bonus
+TERMINAL_BONUS_SCALE: float = 0  # Non-depth-primary terminal scale;
 # Terminal reward = TERMINAL_BONUS + TERMINAL_BONUS_SCALE * min(final_reduction / ceiling, 1.0)
 # Normalising by the per-family ceiling converts absolute gate reduction into a relative
 # Ceilings derived from opt_level=3 benchmark runs; update after major circuit pool changes.
@@ -130,6 +137,32 @@ FAMILY_REDUCTION_CEILING: dict[str, float] = {
     "efficient_su2": 0.01,
     "real_amplitudes": 0.01,
 }
+
+# Families where 2Q reduction is naturally near-zero and depth is the main
+# useful optimisation target.  IQP is included because it behaves like the
+# parametric ansatz families for reward purposes on the benchmark pool.
+DEPTH_PRIMARY_FAMILIES: frozenset[str] = frozenset(
+    {"iqp", "qaoa", "efficient_su2", "real_amplitudes"}
+)
+
+# Depth reduction ceilings for depth-primary families, used as terminal bonus
+# denominator.  Values derived from opt_level=3 benchmark runs on the same pool.
+FAMILY_DEPTH_CEILING: dict[str, float] = {
+    "iqp": 0.12,
+    "qaoa": 0.04,
+    "efficient_su2": 0.49,
+    "real_amplitudes": 0.46,
+}
+
+# Step reward weights for depth-primary families.
+# Depth gets immediate credit so the agent can learn which pass caused the win;
+# 2Q still gets a small weight for IQP-like edge cases.
+DEPTH_PRIMARY_STEP_DEPTH_WEIGHT: float = 0.20
+DEPTH_PRIMARY_STEP_2Q_WEIGHT: float = 0.10
+
+# Depth-primary terminal shaping is separate from TERMINAL_BONUS_SCALE so
+# non-parametric families keep the earlier constant-stop-bonus behaviour.
+DEPTH_PRIMARY_TERMINAL_BONUS_SCALE: float = 0.05
 
 STEP_PENALTY: float = 0.001  # small cost per non-DoNothing action; incentivises
 # the agent to stop unless a pass genuinely helps

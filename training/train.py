@@ -63,9 +63,10 @@ from stable_baselines3.common.callbacks import (
     CheckpointCallback,
 )
 from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.utils import get_schedule_fn
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
-from quetsal.src.agent.ppo_agent import make_ppo_agent, save_agent
+from quetsal.src.agent.ppo_agent import load_agent, make_ppo_agent, save_agent
 from quetsal.training.callbacks import (
     CurriculumCallback,
     EarlyStoppingCallback,
@@ -167,6 +168,13 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--device", type=str, default="auto")
     p.add_argument("--verbose", type=int, default=1)
     p.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Path to a saved PPO model .zip to use as the starting point "
+        "for continued training/fine-tuning.",
+    )
+    p.add_argument(
         "--curriculum",
         action="store_true",
         default=False,
@@ -261,6 +269,10 @@ def _parse_args() -> argparse.Namespace:
 
     if args.build_pool_only and not args.master_pool_path:
         p.error("--build-pool-only requires --master-pool-path")
+    if args.resume_from:
+        _resume_path = Path(args.resume_from)
+        if not _resume_path.exists() and not Path(f"{args.resume_from}.zip").exists():
+            p.error(f"--resume-from model not found: {args.resume_from}")
 
     # Apply mode defaults for args that were not explicitly set (still None).
     # Skip non-scalar entries (e.g. curriculum_smoke) — those are consumed
@@ -315,6 +327,7 @@ def main() -> None:
         "n_envs": args.n_envs,
         "weighted": args.weighted,
         "curriculum": args.curriculum,
+        "resume_from": args.resume_from,
     }
     print(f"[quetsal] hparams: {json.dumps(_hparams)}")
 
@@ -500,25 +513,43 @@ def main() -> None:
     # Curriculum stage 1 overrides ent_coef to the stage-specific value
     _ent_coef = CURRICULUM_STAGES[1]["ent_coef"] if args.curriculum else args.ent_coef
 
-    model = make_ppo_agent(
-        env=env,
-        n_steps=_n_steps_per_env,
-        batch_size=_batch_size,
-        n_epochs=args.n_epochs,
-        gamma=args.gamma,
-        learning_rate=args.lr,
-        clip_range=args.clip_range,
-        ent_coef=_ent_coef,
-        gae_lambda=args.gae_lambda,
-        vf_coef=args.vf_coef,
-        max_grad_norm=args.max_grad_norm,
-        hidden_dim=args.hidden_dim,
-        num_layers=args.num_layers,
-        latent_dim=args.latent_dim,
-        seed=args.seed,
-        verbose=args.verbose,
-        device=args.device,
-    )
+    if args.resume_from:
+        print(f"[quetsal] Resuming model from {args.resume_from}")
+        model = load_agent(args.resume_from, env=env, device=args.device)
+
+        # Fine-tune with the current CLI hyperparameters where SB3 allows safe
+        # in-place updates. Architecture and rollout buffer shape still come
+        # from the checkpoint, so use matching --n-steps/--batch-size when needed.
+        model.n_epochs = args.n_epochs
+        model.gamma = args.gamma
+        model.gae_lambda = args.gae_lambda
+        model.vf_coef = args.vf_coef
+        model.max_grad_norm = args.max_grad_norm
+        model.ent_coef = float(_ent_coef)
+        model.clip_range = get_schedule_fn(args.clip_range)
+        model.learning_rate = get_schedule_fn(args.lr)
+        for pg in model.policy.optimizer.param_groups:
+            pg["lr"] = args.lr
+    else:
+        model = make_ppo_agent(
+            env=env,
+            n_steps=_n_steps_per_env,
+            batch_size=_batch_size,
+            n_epochs=args.n_epochs,
+            gamma=args.gamma,
+            learning_rate=args.lr,
+            clip_range=args.clip_range,
+            ent_coef=_ent_coef,
+            gae_lambda=args.gae_lambda,
+            vf_coef=args.vf_coef,
+            max_grad_norm=args.max_grad_norm,
+            hidden_dim=args.hidden_dim,
+            num_layers=args.num_layers,
+            latent_dim=args.latent_dim,
+            seed=args.seed,
+            verbose=args.verbose,
+            device=args.device,
+        )
     print(f"[quetsal] Policy: {model.policy}")
     _total = sum(p.numel() for p in model.policy.parameters())
     _unique = sum(p.numel() for p in set(model.policy.parameters()))
@@ -705,6 +736,7 @@ def main() -> None:
         total_timesteps=args.total_steps,
         callback=callbacks,
         progress_bar=True,
+        reset_num_timesteps=not bool(args.resume_from),
     )
     elapsed = time.time() - t1
     print(f"[quetsal] Training complete in {elapsed:.1f}s")

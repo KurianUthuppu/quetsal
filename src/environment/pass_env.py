@@ -23,7 +23,8 @@ from qiskit.transpiler.passes import BasisTranslator
 from qiskit.transpiler.passes.utils.gates_basis import GatesInBasis
 from qiskit.transpiler.passes.optimization import (
     Optimize1qGatesDecomposition,
-    # CommutativeInverseCancellation,  # DISABLED — ablation
+    CommutativeCancellation,
+    # CommutativeInverseCancellation,  # DISABLED — weaker than CommutativeCancellation
     ConsolidateBlocks,
     # OptimizeCliffords,               # DISABLED — ablation
     # Split2QUnitaries,                # removed
@@ -127,8 +128,8 @@ class PassManagerEnv(gym.Env):
         self.donothing_early_penalty = donothing_early_penalty
         self.step_penalty = step_penalty
 
-        # -- Action space: 7 discrete actions (6 passes + DoNothing) -----------
-        # Indices 0-5: real passes; index 6: DoNothing (terminate).
+        # -- Action space: 5 discrete actions (4 passes + DoNothing) -----------
+        # Indices 0-3: real passes; index 4: DoNothing (terminate).
         self.action_space = spaces.Discrete(NUM_ACTIONS)
 
         # -- Observation space: padded fixed-size tensors ----------------------
@@ -182,21 +183,24 @@ class PassManagerEnv(gym.Env):
 
         Action 1 is the ConsolidateAndSynthesize macro — stored as a 2-tuple
         (ConsolidateBlocks, UnitarySynthesis) and run sequentially in step().
-        Action 2 is ZXFullReduce (PyzxFullReduce) — falls back to unchanged
+        Action 2 is CommutativeCancellation — commutes/merges rotations through
+        cz/cx; the pass that lets the agent reach opt_level=2/3 depth on
+        parametric ansätze (EfficientSU2/RealAmplitudes).
+        Action 3 is ZXFullReduce (PyzxFullReduce) — falls back to unchanged
         DAG on any failure so it can never crash an episode.
-        The last action (DoNothing, index 3) is handled as a special case in step().
+        The last action (DoNothing, index 4) is handled as a special case in step().
         """
         return [
             Optimize1qGatesDecomposition(basis=self.basis_gates),  # 0
-            # CommutativeInverseCancellation(),  # DISABLED
             (
                 ConsolidateBlocks(basis_gates=self.basis_gates),  # 1 macro
                 UnitarySynthesis(self.basis_gates),
             ),
+            CommutativeCancellation(basis_gates=self.basis_gates),  # 2
+            PyzxFullReduce(),  # 3
             # OptimizeCliffords(),  # DISABLED
-            PyzxFullReduce(),  # 2
             # RemoveIdentityEquivalent(),  # DISABLED
-            # DoNothing is action 3, handled as special case in step()
+            # DoNothing is action 4, handled as special case in step()
         ]
 
     def _run_basis_cleanup(self) -> None:

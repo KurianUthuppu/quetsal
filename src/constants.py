@@ -57,16 +57,22 @@ HERON_R2_BASIS: list[str] = ["cz", "id", "rx", "rz", "rzz", "sx", "x"]
 # ---------------------------------------------------------------------------
 ACTION_LABELS: list[str] = [
     "Optimize1qGatesDecomposition",  # 0  L1,L2,L3 — 1q gate chain decomposition.
-    # "CommutativeInverseCancellation",  # DISABLED — rarely selected; ablation run without it.
     "ConsolidateAndSynthesize",  # 1  macro — ConsolidateBlocks → UnitarySynthesis.
     #              Qiskit never uses CB without US; combining removes the 2-step credit assignment problem.
-    # "OptimizeCliffords",  # DISABLED — rarely selected; ablation run without it.
-    # "Split2QUnitaries",              # REMOVED — genuinely subsumed by ConsolidateAndSynthesize.
-    "ZXFullReduce",  # 2  pyzx.simplify.full_reduce() via QASM round-trip.
+    #              Primary 2q-reduction workhorse on non-parametric (Clifford/QV/SU4) families.
+    "CommutativeCancellation",  # 2  L2,L3 — commutes rotations through cz/cx and merges them.
+    #              The pass behind opt_level=2/3's parametric depth advantage: collapses rotation
+    #              layers across entangling gates on EfficientSU2/RealAmplitudes. Optimize1q alone
+    #              only reaches opt_level=1 depth; CommutativeCancellation closes the gap to opt2/3.
+    #              Verified neutral on non-parametric 2q reduction (same as Optimize1q + CB→US alone).
+    "ZXFullReduce",  # 3  pyzx.simplify.full_reduce() via QASM round-trip.
     #              ZX-calculus spider fusion + phase gadget reduction + Clifford simp.
     #              Highest 2q-reduction ceiling; most effective on Clifford-heavy circuits.
+    # "CommutativeInverseCancellation",  # DISABLED — weaker than CommutativeCancellation (inverse-pair only).
+    # "OptimizeCliffords",  # DISABLED — rarely selected; ablation run without it.
+    # "Split2QUnitaries",              # REMOVED — genuinely subsumed by ConsolidateAndSynthesize.
     # "RemoveIdentityEquivalent",  # DISABLED — rarely selected; ablation run without it.
-    "DoNothing",  # 3  terminate episode
+    "DoNothing",  # 4  terminate episode
 ]
 NUM_ACTIONS: int = len(ACTION_LABELS)
 
@@ -157,12 +163,23 @@ FAMILY_DEPTH_CEILING: dict[str, float] = {
 # Step reward weights for depth-primary families.
 # Depth gets immediate credit so the agent can learn which pass caused the win;
 # 2Q still gets a small weight for IQP-like edge cases.
-DEPTH_PRIMARY_STEP_DEPTH_WEIGHT: float = 0.20
+#
+# A/B RUN TOGGLE (CommutativeCancellation experiment):
+#   Run A (action add only):  leave at the r5 baseline values below (0.20 / 0.05).
+#   Run B (action add + depth-reward push): set DEPTH_PRIMARY_STEP_DEPTH_WEIGHT = 0.35
+#       and DEPTH_PRIMARY_TERMINAL_BONUS_SCALE = 0.08.
+#   Keep the rest of the training protocol identical between A and B so the only
+#   variable is the reward.  Do NOT push the depth weight much past 0.35 — an
+#   over-strong parametric depth signal is what dented Clifford-SU4-SU8 in r6.
+DEPTH_PRIMARY_STEP_DEPTH_WEIGHT: float = 0.35  # Run A: 0.20 | Run B: 0.35
 DEPTH_PRIMARY_STEP_2Q_WEIGHT: float = 0.10
 
 # Depth-primary terminal shaping is separate from TERMINAL_BONUS_SCALE so
 # non-parametric families keep the earlier constant-stop-bonus behaviour.
-DEPTH_PRIMARY_TERMINAL_BONUS_SCALE: float = 0.05
+# NOTE: FAMILY_DEPTH_CEILING (efficient_su2=0.49, real_amplitudes=0.46) was set to
+# the opt_level=2/3 ceiling and was UNREACHABLE before CommutativeCancellation was
+# added — now it is reachable, so this terminal normalization finally works as designed.
+DEPTH_PRIMARY_TERMINAL_BONUS_SCALE: float = 0.08  # Run A: 0.05 | Run B: 0.08
 
 STEP_PENALTY: float = 0.001  # small cost per non-DoNothing action; incentivises
 # the agent to stop unless a pass genuinely helps

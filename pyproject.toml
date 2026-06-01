@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quetsal"
+version = "0.1.0"
+description = "RL agent that learns bespoke Qiskit transpiler optimization pass sequences"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Kurian Uthuppu"},
+]
+keywords = ["qiskit", "quantum", "transpiler", "reinforcement-learning", "gnn"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+    "License :: OSI Approved :: Apache Software License",
+]
+dependencies = [
+    "qiskit>=2.0",
+    "torch>=2.0",
+    "torch-geometric>=2.0",
+    "stable-baselines3>=2.0",
+    "gymnasium>=0.27",
+    "numpy>=1.24",
+    "pyzx>=0.8",
+]
+
+[project.urls]
+Repository = "https://github.com/kurianuthuppu/quetsal"
+Issues = "https://github.com/kurianuthuppu/quetsal/issues"
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "ipykernel"]
+
+[project.entry-points."qiskit.transpiler.optimization"]
+quetsal = "quetsal.src.plugin.quetsal_plugin:QuetsalPlugin"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["quetsal*"]
+# Ship the full package: plugin runtime (src), plus training/ (retraining),
+# benchmarks/ (eval) and experiments/ (track) so installed users can also
+# retrain and reproduce the parameter / benchmark analysis, not just run the plugin.
+
+# Ship the trained agent inside the wheel so the plugin works with zero config.
+[tool.setuptools.package-data]
+quetsal = ["models/*.zip"]

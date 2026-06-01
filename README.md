@@ -172,7 +172,7 @@ The 9.7% overall 2q figure is diluted by the four parametric families (400 circu
 
 **Quetsal is trained and validated on 3–10 qubit circuits, and is intended for use in that range.** Every result above is on 3–10 qubit Heron r2 circuits — the distribution the agent was trained on. Within this range it reliably beats `opt_level=2/3` on both 2q-gate and depth reduction for non-parametric families and with no depth regression for parametric families.
 
-**Scalability is the primary limitation.** The reference paper (arXiv:2601.21629) reports that a model trained on small circuits can be deployed on much larger ones. In the Qiskit-native setting we find this small-train / large-deploy generalization holds only modestly, and degrades as circuit size grows past the training range:
+**Scalability is the primary limitation.** The reference paper (arXiv:2601.21629) reports that a model trained on small circuits can be deployed on much larger ones. In the Qiskit-native setting I find this small-train / large-deploy generalization holds only modestly, and degrades as circuit size grows past the training range:
 
 The degradation is architectural rather than a tuning artifact:
 

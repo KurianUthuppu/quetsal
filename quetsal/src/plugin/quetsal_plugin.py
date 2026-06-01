@@ -4,7 +4,7 @@ quetsal/src/plugin/quetsal_plugin.py
 Integrates the trained Quetsal RL agent into Qiskit's transpiler pipeline as
 a PassManagerStagePlugin that replaces the optimization stage.
 
-After ``pip install quetsal-qiskit`` registers the entry point declared in
+After ``pip install quetsal`` registers the entry point declared in
 ``pyproject.toml`` under ``[project.entry-points."qiskit.transpiler.optimization"]``,
 a user calls:
 
@@ -16,9 +16,10 @@ a user calls:
     )
     optimized_circuit = pm.run(raw_circuit)
 
-During development (no entry-point registration needed), instantiate directly:
+The trained agent ships inside the package, so no model path is required.
+To use a different checkpoint, instantiate directly with an explicit path:
 
-    plugin = QuetsalPlugin(model_path=MODEL_PATH)
+    plugin = QuetsalPlugin(model_path="path/to/model.zip")   # or QuetsalPlugin() for bundled
     pm.optimization = plugin.pass_manager(pass_manager_config=None)
 """
 
@@ -26,6 +27,7 @@ from __future__ import annotations
 
 __all__ = ["QuetsalOptimizationPass", "QuetsalPlugin"]
 
+from importlib.resources import files
 from pathlib import Path
 from typing import Optional
 
@@ -37,6 +39,16 @@ from qiskit.transpiler.preset_passmanagers.plugin import PassManagerStagePlugin
 from quetsal.src.constants import MAX_STEPS_PER_EPISODE, SKIP_GATES
 from quetsal.src.environment.pass_env import PassManagerEnv
 from quetsal.src.agent.ppo_agent import load_agent
+
+
+def _bundled_model_path() -> Path:
+    """Filesystem path to the trained agent shipped inside the installed package.
+
+    Declared as package data in pyproject.toml ([tool.setuptools.package-data]
+    quetsal = ["models/*.zip"]).  Lets ``QuetsalPlugin()`` run with zero config
+    after ``pip install quetsal``.
+    """
+    return Path(str(files("quetsal").joinpath("models", "best_model.zip")))
 
 
 class QuetsalOptimizationPass(TransformationPass):
@@ -57,19 +69,20 @@ class QuetsalOptimizationPass(TransformationPass):
 
     def __init__(
         self,
-        model_path: str | Path,
+        model_path: str | Path | None = None,
         device: str = "cpu",
         verbose: bool = False,
     ):
         """
         Parameters
         ----------
-        model_path : Path to the trained PPO model (.zip).
+        model_path : Path to the trained PPO model (.zip).  Defaults to the
+                     agent bundled with the package when None.
         device     : PyTorch device for inference (``"cpu"`` or ``"cuda"``).
         verbose    : If True, prints the chosen pass sequence to stdout.
         """
         super().__init__()
-        self.model_path = Path(model_path)
+        self.model_path = Path(model_path) if model_path else _bundled_model_path()
         self.device = device
         self.verbose = verbose
         self._model = None  # lazy-loaded on first call
@@ -174,8 +187,8 @@ class QuetsalPlugin(PassManagerStagePlugin):
         """
         Parameters
         ----------
-        model_path : Path to the trained model ``.zip``.  Required; raises
-                     ``ValueError`` at ``pass_manager()`` time if not set.
+        model_path : Path to the trained model ``.zip``.  Defaults to the agent
+                     bundled with the package when None (zero-config usage).
         device     : ``"cpu"`` or ``"cuda"``.
         verbose    : Passed through to ``QuetsalOptimizationPass``.
         """
@@ -210,11 +223,8 @@ class QuetsalPlugin(PassManagerStagePlugin):
             ``plugin._quetsal_pass.last_pass_sequence``
             ``plugin._quetsal_pass.last_trace_2q``
         """
-        if self.model_path is None:
-            raise ValueError(
-                "QuetsalPlugin requires model_path.  "
-                "Pass it to QuetsalPlugin(model_path=...) before calling pass_manager()."
-            )
+        # model_path may be None here — QuetsalOptimizationPass falls back to the
+        # agent bundled with the package, so the plugin works with zero config.
         self._quetsal_pass = QuetsalOptimizationPass(
             model_path=self.model_path,
             device=self.device,

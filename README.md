@@ -53,6 +53,18 @@ DAGCircuit → GINEConv Graph Encoder → PPO Policy (SB3) → Pass Selection Ac
 
 ## Quick Start
 
+### Install
+
+```bash
+pip install quetsal
+```
+
+The trained agent (3–10 qubit regime) ships inside the package, so the plugin works with no extra downloads.
+
+### Train, benchmark & analyze
+
+These modules ship with the package, so they work after `pip install quetsal` as well as from a source checkout.
+
 ```bash
 # Train — full staged curriculum (Stage 1 non-param → 2 parametric blend → 3 all families, ~500K steps)
 python -m quetsal.training.train --mode 1 --curriculum
@@ -67,19 +79,42 @@ python -m quetsal.benchmarks.eval \
 
 # Baseline only (no model required)
 python -m quetsal.benchmarks.eval --baseline-only
+
+# Log a completed run's hyperparameters + results to CSV for comparison
+python -m quetsal.experiments.track \
+  --model runs/quetsal/best_model/<timestamp>/best_model.zip \
+  --mode 1 --notes "curriculum r13"
 ```
 
-Use via plugin (after `pip install -e quetsal/`):
+### Use via plugin
+
+After `pip install quetsal`, the entry point is registered automatically — select it through Qiskit's preset pass manager:
+
+```python
+from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
+
+pm = generate_preset_pass_manager(
+    optimization_level=1,            # layout + routing + translation
+    optimization_plugin="quetsal",   # ← Quetsal replaces the optimization stage
+    basis_gates=["cz", "id", "rx", "rz", "rzz", "sx", "x"],
+    coupling_map=cm,
+)
+optimized_circuit = pm.run(raw_circuit)
+```
+
+Or drive it directly (uses the bundled agent by default; pass `model_path=...` to override):
 
 ```python
 from quetsal.src.plugin.quetsal_plugin import QuetsalPlugin
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 
-plugin = QuetsalPlugin(model_path="runs/quetsal/best_model/<timestamp>/best_model.zip")
+plugin = QuetsalPlugin()  # bundled 3–10 qubit agent
 pm = generate_preset_pass_manager(optimization_level=1, basis_gates=..., coupling_map=cm)
 pm.optimization = plugin.pass_manager(pass_manager_config=None)
 optimized_circuit = pm.run(raw_circuit)
 ```
+
+> Reminder: the bundled agent is trained for **3–10 qubit** circuits. See [Scope & Limitations](#scope--limitations) before using it on larger circuits.
 
 ---
 
@@ -130,6 +165,18 @@ Parametric families have near-zero 2q gate reduction across all optimizers; the 
 | Mean depth reduction |         40.1% |   **42.0%** |
 
 The 9.7% overall 2q figure is diluted by the four parametric families (400 circuits, ~0% reduction each by construction). On the 316 non-parametric circuits the mean is **21.9%** — roughly double opt_level=2/3.
+
+---
+
+## Scope & Limitations
+
+**Quetsal is trained and validated on 3–10 qubit circuits, and is intended for use in that range.** Every result above is on 3–10 qubit Heron r2 circuits — the distribution the agent was trained on. Within this range it reliably beats `opt_level=2/3` on both 2q-gate and depth reduction for non-parametric families and with no depth regression for parametric families.
+
+**Scalability is the primary limitation.** The reference paper (arXiv:2601.21629) reports that a model trained on small circuits can be deployed on much larger ones. In the Qiskit-native setting we find this small-train / large-deploy generalization holds only modestly, and degrades as circuit size grows past the training range:
+
+The degradation is architectural rather than a tuning artifact:
+
+- **Fixed receptive field** — the GNN runs a fixed number of message-passing hops regardless of circuit size, so on large/deep DAGs each node sees a shrinking fraction of the circuit.
 
 ---
 

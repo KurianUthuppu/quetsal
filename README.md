@@ -88,31 +88,9 @@ python -m quetsal.experiments.track \
 
 ### Use via plugin
 
-After `pip install quetsal`, the entry point is registered automatically — select it through Qiskit's preset pass manager:
+After `pip install quetsal`, the entry point is registered automatically — select it through Qiskit's preset pass manager by passing `optimization_method="quetsal"`. The bundled 3–10 qubit agent is loaded automatically, with no model file to manage.
 
-```python
-from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
-
-pm = generate_preset_pass_manager(
-    optimization_level=1,            # layout + routing + translation
-    optimization_plugin="quetsal",   # ← Quetsal replaces the optimization stage
-    basis_gates=["cz", "id", "rx", "rz", "rzz", "sx", "x"],
-    coupling_map=cm,
-)
-optimized_circuit = pm.run(raw_circuit)
-```
-
-Or drive it directly (uses the bundled agent by default; pass `model_path=...` to override):
-
-```python
-from quetsal.src.plugin.quetsal_plugin import QuetsalPlugin
-from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
-
-plugin = QuetsalPlugin()  # bundled 3–10 qubit agent
-pm = generate_preset_pass_manager(optimization_level=1, basis_gates=..., coupling_map=cm)
-pm.optimization = plugin.pass_manager(pass_manager_config=None)
-optimized_circuit = pm.run(raw_circuit)
-```
+See [`testRunQuetsal.ipynb`](testRunQuetsal.ipynb) for the complete post-install walkthrough: it builds a 7-qubit `random_clifford` circuit, transpiles it with both `optimization_level=3` and `optimization_method="quetsal"`, and prints a side-by-side table of depth, op count, and 2q-gate count so you can see the reduction directly.
 
 > Reminder: the bundled agent is trained for **3–10 qubit** circuits. See [Scope & Limitations](#scope--limitations) before using it on larger circuits.
 
